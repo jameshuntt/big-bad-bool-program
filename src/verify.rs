@@ -120,7 +120,7 @@ impl ContractIndex {
 #[derive(Debug, Clone)]
 pub struct VerifiedProgram {
     spec: ProgramSpec,
-    recognizer: Recognizer,
+    recognizer: Option<Recognizer>,
     index: ContractIndex,
     inputs: Vec<Observation>,
     digest: StableDigest,
@@ -134,10 +134,10 @@ impl VerifiedProgram {
         &self.spec
     }
 
-    /// The compiled recognizer.
+    /// The compiled recognizer, when the program has one.
     #[must_use]
-    pub const fn recognizer(&self) -> &Recognizer {
-        &self.recognizer
+    pub const fn recognizer(&self) -> Option<&Recognizer> {
+        self.recognizer.as_ref()
     }
 
     /// The spec's digest: what a trace names, and what a parked session is checked against.
@@ -255,12 +255,14 @@ fn fixed_words(spec: &ProgramSpec, found: &mut Vec<Finding>) {
             check_fixed("start", d, start.word(DimensionId(i as u16)), found);
         }
     }
-    check_fixed(
-        "recognizer",
-        &spec.dims[spec.item_dim],
-        spec.end_word,
-        found,
-    );
+    if let Some(framing) = &spec.framing {
+        check_fixed(
+            "recognizer",
+            &spec.dims[framing.item_dim],
+            framing.end_word,
+            found,
+        );
+    }
     for c in &spec.resolved {
         for op in &c.stack {
             if let ResolvedStackOp::Push { dim, values } = op {
@@ -300,9 +302,10 @@ pub fn verify(
 ) -> Result<VerifiedProgram, VerificationReport> {
     let mut report = VerificationReport::default();
     fixed_words(&spec, &mut report.findings);
-    let recognizer = match Recognizer::new(&spec) {
-        Ok(r) => r,
-        Err(found) => {
+    let recognizer = match spec.framing.as_ref().map(|_| Recognizer::new(&spec)) {
+        None => None,
+        Some(Ok(r)) => Some(r),
+        Some(Err(found)) => {
             report.findings.extend(found);
             return Err(report);
         }
@@ -325,18 +328,24 @@ pub fn verify(
     let Some(inputs) = evidence_inputs(&spec, &labelled, tries) else {
         return too_many(report);
     };
-    let items = labelled[spec.item_dim].clone();
     let index = ContractIndex::new(&spec);
-    sequences(&spec, &items, &mut report.findings);
+    if let Some(item_dim) = spec.item_dim() {
+        sequences(&spec, item_dim, &labelled[item_dim], &mut report.findings);
+    }
     let frames: Vec<u128> = std::iter::once(0)
-        .chain(recognizer.universe().iter().map(|f| f.word))
+        .chain(
+            recognizer
+                .iter()
+                .flat_map(Recognizer::universe)
+                .map(|f| f.word),
+        )
         .collect();
     for c in 0..spec.resolved.len() {
         satisfiable(&spec, c, &labelled, &frames, limits, &mut report.findings);
     }
     report.states = search(
         &spec,
-        &recognizer,
+        recognizer.as_ref(),
         &index,
         &inputs,
         limits,
@@ -370,9 +379,9 @@ fn meet(
 
 /// Equal-length sequences that can match one window with different facts
 /// (error), and sequences that can match inside a longer one (info).
-fn sequences(spec: &ProgramSpec, items: &[u128], found: &mut Vec<Finding>) {
-    let schema = spec.dims[spec.item_dim].schema();
-    let seqs = &spec.sequences;
+fn sequences(spec: &ProgramSpec, item_dim: usize, items: &[u128], found: &mut Vec<Finding>) {
+    let schema = spec.dims[item_dim].schema();
+    let seqs = spec.sequences();
     for (i, a) in seqs.iter().enumerate() {
         for (j, b) in seqs.iter().enumerate() {
             if i == j || a.items.is_empty() || b.items.is_empty() {
@@ -524,7 +533,7 @@ fn satisfiable(
             };
             let witnessed = if spec.is_observed(DimensionId(d as u16)) {
                 labelled[d].iter().any(|w| fits(*w))
-            } else if d == spec.frame_dim {
+            } else if Some(d) == spec.frame_dim() {
                 frames.iter().any(|w| fits(*w))
             } else {
                 let named: Vec<&ResolvedClause> = pos.iter().chain(neg.iter()).copied().collect();
@@ -623,13 +632,14 @@ fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
 /// not followed. Returns the number of states visited.
 fn search(
     spec: &ProgramSpec,
-    recognizer: &Recognizer,
+    recognizer: Option<&Recognizer>,
     index: &ContractIndex,
     observations: &[Observation],
     limits: VerifyLimits,
     found: &mut Vec<Finding>,
 ) -> usize {
-    let item_dim = DimensionId(spec.item_dim as u16);
+    let item_dim = spec.item_dimension();
+    let end_word = spec.end_word();
     let mut inputs: Vec<Input> = observations
         .iter()
         .map(|o| Input {
@@ -638,11 +648,15 @@ fn search(
             sequence: None,
         })
         .collect();
-    for f in recognizer.universe() {
-        for o in observations {
-            if o.word(item_dim)
-                .is_some_and(|item| recognizer.accepts(&f, item))
-            {
+    if let Some((recognizer, item_dim)) = recognizer.zip(item_dim) {
+        for f in recognizer.universe() {
+            for o in observations {
+                if !o
+                    .word(item_dim)
+                    .is_some_and(|item| recognizer.accepts(&f, item))
+                {
+                    continue;
+                }
                 inputs.push(Input {
                     observation: o.clone(),
                     frame: f.word,
@@ -658,14 +672,14 @@ fn search(
     let mut queue = VecDeque::from([start]);
     let mut committed = vec![false; spec.resolved.len()];
     let mut used: Vec<Vec<bool>> = spec
-        .sequences
+        .sequences()
         .iter()
         .map(|s| vec![false; s.items.len()])
         .collect();
     let mut ambiguous: Vec<(ContractId, ContractId)> = Vec::new();
     let mut no_exit: Option<String> = None;
     let mut complete = true;
-    let frame_describe = &spec.dims[spec.frame_dim];
+    let frame_describe = spec.frame_dim().map(|d| &spec.dims[d]);
 
     while let Some(state) = queue.pop_front() {
         let mut exit = false;
@@ -702,10 +716,9 @@ fn search(
                                 "{} evidence={} frame={}",
                                 render_state(spec, &state),
                                 render_evidence(spec, &input.observation),
-                                if input.sequence.is_some() {
-                                    frame_describe.describe(input.frame)
-                                } else {
-                                    "none".to_owned()
+                                match (input.sequence, frame_describe) {
+                                    (Some(_), Some(frame)) => frame.describe(input.frame),
+                                    _ => "none".to_owned(),
                                 }
                             ),
                         });
@@ -721,7 +734,7 @@ fn search(
                         if let Some((s, o)) = input.sequence {
                             used[s][o] = true;
                         }
-                        let end = input.observation.word(item_dim) == Some(spec.end_word);
+                        let end = item_dim.is_some_and(|d| input.observation.word(d) == end_word);
                         if !end && seen.insert(next.clone()) {
                             if seen.len() as u128 > limits.max_states {
                                 complete = false;
@@ -761,7 +774,7 @@ fn search(
             });
         }
     }
-    for (s, offsets) in spec.sequences.iter().zip(&used) {
+    for (s, offsets) in spec.sequences().iter().zip(&used) {
         for (offset, done) in offsets.iter().enumerate() {
             if !done {
                 found.push(Finding::DeadSequence {

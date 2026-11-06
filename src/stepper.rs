@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 
 use crate::codes::Refusal;
 use crate::contract::{FactView, Outcome, evaluate};
-use crate::frame::FrameFacts;
+use crate::frame::{FrameFacts, Recognizer};
 use crate::model::{ContractId, DimensionRole, Observation, ProgramSpec, RefusalRule};
 use crate::observe::{Observer, StepEvent};
 use crate::step::authorize::authorize;
@@ -88,13 +88,15 @@ impl<'p, O: Observer> Stepper<'p, O> {
         results
     }
 
-    /// Steps every remaining position, then the end item.
+    /// Steps every remaining position, then the end item. A program
+    /// without a recognizer has no end item and nothing left to step.
     pub fn finish(&mut self) -> Vec<StepResult> {
         if self.finished {
             return Vec::new();
         }
         let mut results = Vec::new();
-        while !self.halted && self.next <= self.received {
+        let last = self.received + usize::from(self.program.spec().end_word().is_some());
+        while !self.halted && self.next < last {
             results.push(self.step(true));
         }
         self.finished = true;
@@ -133,17 +135,18 @@ impl<'p, O: Observer> Stepper<'p, O> {
     pub fn legal_next(&self) -> Vec<Observation> {
         let program = self.program;
         let spec = program.spec();
-        let frames = program.recognizer().universe();
+        let recognizer = program.recognizer();
+        let frames = recognizer.map(Recognizer::universe).unwrap_or_default();
         let next = u32::try_from(self.next).unwrap_or(u32::MAX);
         program
             .inputs()
             .iter()
             .filter(|input| {
-                let item = input.word(spec.item_dimension());
+                let item = spec.item_dimension().and_then(|d| input.word(d));
                 let mut views = std::iter::once(None).chain(
                     frames
                         .iter()
-                        .filter(|f| item.is_some_and(|w| program.recognizer().accepts(f, w)))
+                        .filter(|f| item.zip(recognizer).is_some_and(|(w, r)| r.accepts(f, w)))
                         .map(Some),
                 );
                 views.any(|frame: Option<&FrameFacts>| {
@@ -175,10 +178,10 @@ impl<'p, O: Observer> Stepper<'p, O> {
             if refusal.is_some() {
                 None
             } else {
-                observation.word(self.program.spec().item_dimension())
+                observation.word(self.program.spec().item_dimension()?)
             }
         } else if finishing {
-            Some(self.program.spec().end_word())
+            self.program.spec().end_word()
         } else {
             None
         }
@@ -191,8 +194,13 @@ impl<'p, O: Observer> Stepper<'p, O> {
         let (observation, admission) = if index < self.received {
             self.buffer[index - self.base].clone()
         } else {
-            let end =
-                Observation::new(self.end_position).with(spec.item_dimension(), spec.end_word());
+            // Only reached with a recognizer: `finish` steps one past the input only then.
+            let end = spec
+                .item_dimension()
+                .zip(spec.end_word())
+                .map_or(Observation::new(self.end_position), |(d, w)| {
+                    Observation::new(self.end_position).with(d, w)
+                });
             (end, None)
         };
         let position = observation.position();
@@ -200,7 +208,8 @@ impl<'p, O: Observer> Stepper<'p, O> {
 
         let frames = program
             .recognizer()
-            .recognize_with(index, |i| self.item_at(i, finishing));
+            .map(|r| r.recognize_with(index, |i| self.item_at(i, finishing)))
+            .unwrap_or_default();
         self.observer.observe(&StepEvent::Framed(&frames));
 
         let result = if let Some(refusal) = admission {

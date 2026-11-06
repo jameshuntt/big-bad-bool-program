@@ -21,13 +21,13 @@ fn five_dimension_program_builds() {
     let context = spec.dimension(DimensionId(2)).unwrap();
     assert_eq!(context.role(), DimensionRole::State);
     assert_eq!(context.stack_depth(), Some(32));
-    assert_eq!(spec.item_dimension(), DimensionId(0));
-    assert_eq!(spec.frame_dimension(), DimensionId(1));
+    assert_eq!(spec.item_dimension(), Some(DimensionId(0)));
+    assert_eq!(spec.frame_dimension(), Some(DimensionId(1)));
     assert_eq!(spec.contracts().len(), 15);
     assert_eq!(spec.contract_id("callee-reference").map(|c| c.0), Some(11));
     assert_eq!(spec.sequence_id("CallWithArg").map(|s| s.0), Some(4));
     assert_eq!(spec.window_radius(), 3);
-    assert_eq!(spec.end_word(), common::END);
+    assert_eq!(spec.end_word(), Some(common::END));
     let state = spec.dimension(DimensionId(3)).unwrap();
     assert_eq!(state.default_word(), 0b1000);
     assert_eq!(
@@ -329,7 +329,7 @@ fn missing_parts_duplicates_and_stack_bounds() {
                 dimension: "state",
                 rule: "only a state dimension can be stacked"
             },
-            Finding::Missing { part: "recognizer" },
+            // No `Missing { part: "recognizer" }`: a recognizer is optional (correction 1).
         ]
     );
 

@@ -632,17 +632,27 @@ pub(crate) struct FrameLayout {
     pub(crate) boundary_bit: u128,
 }
 
-/// A program whose names all resolve and whose values all fit. Built by
-/// [`ProgramBuilder::build`]; checked for coherence by [`verify`](crate::verify).
+/// A recognizer with every name resolved.
 #[derive(Debug, Clone)]
-pub struct ProgramSpec {
-    pub(crate) dims: Vec<DimensionSpec>,
+pub(crate) struct Framing {
     pub(crate) recognizer: RecognizerSpec,
     pub(crate) item_dim: usize,
     pub(crate) frame_dim: usize,
-    pub(crate) frame: FrameLayout,
+    pub(crate) layout: FrameLayout,
     pub(crate) end_word: u128,
     pub(crate) sequences: Vec<ResolvedSequence>,
+}
+
+/// A program whose names all resolve and whose values all fit. Built by
+/// [`ProgramBuilder::build`]; checked for coherence by [`verify`](crate::verify).
+///
+/// The recognizer is optional. Without one, a program is dimensions,
+/// contracts and containment: observations bring every evidence word, the
+/// window radius is zero, and there is no end item.
+#[derive(Debug, Clone)]
+pub struct ProgramSpec {
+    pub(crate) dims: Vec<DimensionSpec>,
+    pub(crate) framing: Option<Framing>,
     pub(crate) contracts: Vec<ContractSpec>,
     pub(crate) resolved: Vec<ResolvedContract>,
     pub(crate) containment: ContainmentSpec,
@@ -691,22 +701,22 @@ impl ProgramSpec {
             .map(|i| ContractId(i as u16))
     }
 
-    /// The recognizer.
+    /// The recognizer, when the program has one.
     #[must_use]
-    pub const fn recognizer(&self) -> &RecognizerSpec {
-        &self.recognizer
+    pub fn recognizer(&self) -> Option<&RecognizerSpec> {
+        self.framing.as_ref().map(|f| &f.recognizer)
     }
 
     /// A sequence by id.
     #[must_use]
     pub fn sequence(&self, id: SequenceId) -> Option<&SequenceSpec> {
-        self.recognizer.sequences.get(usize::from(id.0))
+        self.recognizer()?.sequences.get(usize::from(id.0))
     }
 
     /// A sequence's id by name.
     #[must_use]
     pub fn sequence_id(&self, name: &str) -> Option<SequenceId> {
-        self.recognizer
+        self.recognizer()?
             .sequences
             .iter()
             .position(|s| s.name == name)
@@ -719,32 +729,46 @@ impl ProgramSpec {
         &self.containment
     }
 
-    /// Items of context on each side of the focal item: the longest sequence minus one.
+    /// Items of context on each side of the focal item: the longest
+    /// sequence minus one. Zero without a recognizer.
     #[must_use]
     pub fn window_radius(&self) -> usize {
-        self.sequences
+        self.sequences()
             .iter()
             .map(|s| s.items.len().saturating_sub(1))
             .max()
             .unwrap_or(0)
     }
 
-    /// The item word past the last observation.
+    /// The item word past the last observation, when there is a recognizer.
     #[must_use]
-    pub const fn end_word(&self) -> u128 {
-        self.end_word
+    pub fn end_word(&self) -> Option<u128> {
+        self.framing.as_ref().map(|f| f.end_word)
     }
 
-    /// The item dimension.
+    /// The recognizer's item dimension.
     #[must_use]
-    pub const fn item_dimension(&self) -> DimensionId {
-        DimensionId(self.item_dim as u16)
+    pub fn item_dimension(&self) -> Option<DimensionId> {
+        self.item_dim().map(|i| DimensionId(i as u16))
     }
 
-    /// The frame dimension.
+    /// The recognizer's frame dimension.
     #[must_use]
-    pub const fn frame_dimension(&self) -> DimensionId {
-        DimensionId(self.frame_dim as u16)
+    pub fn frame_dimension(&self) -> Option<DimensionId> {
+        self.frame_dim().map(|i| DimensionId(i as u16))
+    }
+
+    pub(crate) fn item_dim(&self) -> Option<usize> {
+        self.framing.as_ref().map(|f| f.item_dim)
+    }
+
+    pub(crate) fn frame_dim(&self) -> Option<usize> {
+        self.framing.as_ref().map(|f| f.frame_dim)
+    }
+
+    /// The resolved sequences; none without a recognizer.
+    pub(crate) fn sequences(&self) -> &[ResolvedSequence] {
+        self.framing.as_ref().map_or(&[], |f| &f.sequences)
     }
 
     /// True for an evidence dimension an observation may hold: every
@@ -754,7 +778,7 @@ impl ProgramSpec {
         let i = usize::from(dimension.0);
         self.dims
             .get(i)
-            .is_some_and(|d| d.role == DimensionRole::Evidence && i != self.frame_dim)
+            .is_some_and(|d| d.role == DimensionRole::Evidence && Some(i) != self.frame_dim())
     }
 
     /// The dimensions an observation may hold, in order.
@@ -794,7 +818,7 @@ impl ProgramBuilder {
         self
     }
 
-    /// Sets the recognizer.
+    /// Sets the recognizer. A program without one is contracts over observed evidence only.
     #[must_use]
     pub fn recognize(mut self, recognizer: RecognizerSpec) -> Self {
         self.recognizer = Some(recognizer);
@@ -859,13 +883,10 @@ impl ProgramBuilder {
         }
 
         let resolver = Resolver { dims: &dims };
-        let recognized = match self.recognizer {
-            Some(r) => resolver.recognizer(&r, &mut out).map(|parts| (r, parts)),
-            None => {
-                out.push(Finding::Missing { part: "recognizer" });
-                None
-            }
-        };
+        let asked = self.recognizer.is_some();
+        let framing = self
+            .recognizer
+            .and_then(|r| resolver.recognizer(&r, &mut out));
 
         let mut resolved = Vec::with_capacity(self.contracts.len());
         for (i, c) in self.contracts.iter().enumerate() {
@@ -878,15 +899,10 @@ impl ProgramBuilder {
             resolved.push(resolver.contract(c, &mut out));
         }
 
-        match (recognized, containment) {
-            (Some((recognizer, parts)), Some(containment)) if out.is_empty() => Ok(ProgramSpec {
+        match containment {
+            Some(containment) if out.is_empty() && asked == framing.is_some() => Ok(ProgramSpec {
                 dims,
-                recognizer,
-                item_dim: parts.item_dim,
-                frame_dim: parts.frame_dim,
-                frame: parts.frame,
-                end_word: parts.end_word,
-                sequences: parts.sequences,
+                framing,
                 contracts: self.contracts,
                 resolved,
                 containment,
@@ -894,14 +910,6 @@ impl ProgramBuilder {
             _ => Err(out),
         }
     }
-}
-
-struct RecognizerParts {
-    item_dim: usize,
-    frame_dim: usize,
-    frame: FrameLayout,
-    end_word: u128,
-    sequences: Vec<ResolvedSequence>,
 }
 
 struct Resolver<'a> {
@@ -1165,7 +1173,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn recognizer(&self, r: &RecognizerSpec, out: &mut Vec<Finding>) -> Option<RecognizerParts> {
+    fn recognizer(&self, r: &RecognizerSpec, out: &mut Vec<Finding>) -> Option<Framing> {
         const OWNER: &str = "recognizer";
         let item_dim = self.dim(OWNER, r.item_dimension, out);
         let frame_dim = self.dim(OWNER, r.frame_dimension, out);
@@ -1307,10 +1315,11 @@ impl Resolver<'_> {
             }
         };
 
-        Some(RecognizerParts {
+        Some(Framing {
+            recognizer: *r,
             item_dim,
             frame_dim,
-            frame: FrameLayout {
+            layout: FrameLayout {
                 sequence: sequence?,
                 offset: offset?,
                 position: position?,

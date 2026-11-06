@@ -1,8 +1,9 @@
 //! The spec's stable material and its digest.
 //!
 //! The material is plain text in liaise's `key.len=N` / `key=value` form:
-//! every dimension with its whole schema, the recognizer, every contract and
-//! the containment limits, in declaration order. stable_digest hashes it.
+//! every dimension with its whole schema, the recognizer when there is one,
+//! every contract and the containment limits, in declaration order.
+//! stable_digest hashes it.
 //! Nothing here runs at step time.
 
 use big_bad_bool_core::{FieldRelationKind, ValueRangeKind};
@@ -147,30 +148,33 @@ pub fn spec_material(spec: &ProgramSpec) -> String {
         }
     }
 
-    let r = spec.recognizer();
-    m.field("recognizer.item_dimension", r.item_dimension);
-    m.field("recognizer.frame_dimension", r.frame_dimension);
-    m.field("recognizer.sequence_field", r.sequence_field);
-    m.field("recognizer.offset_field", r.offset_field);
-    m.field("recognizer.position_field", r.position_field);
-    m.field("recognizer.boundary_flag", r.boundary_flag);
-    m.field("recognizer.end_item", &value(&r.end_item));
-    for (i, s) in r.sequences.iter().enumerate() {
-        let k = format!("sequence[{i}]");
-        m.field(&format!("{k}.name"), s.name);
-        for (j, item) in s.items.iter().enumerate() {
-            let text = match item {
-                ItemMatch::Any => "any".to_owned(),
-                ItemMatch::One(one) => matcher(one),
-                ItemMatch::OneOf(many) => many.iter().map(matcher).collect::<Vec<_>>().join(" | "),
-            };
-            m.field(&format!("{k}.item[{j}]"), &text);
-        }
-        for (j, f) in s.facts.iter().enumerate() {
-            m.field(
-                &format!("{k}.facts[{j}]"),
-                &format!("{} {}", f.offset, values(f.values)),
-            );
+    if let Some(r) = spec.recognizer() {
+        m.field("recognizer.item_dimension", r.item_dimension);
+        m.field("recognizer.frame_dimension", r.frame_dimension);
+        m.field("recognizer.sequence_field", r.sequence_field);
+        m.field("recognizer.offset_field", r.offset_field);
+        m.field("recognizer.position_field", r.position_field);
+        m.field("recognizer.boundary_flag", r.boundary_flag);
+        m.field("recognizer.end_item", &value(&r.end_item));
+        for (i, s) in r.sequences.iter().enumerate() {
+            let k = format!("sequence[{i}]");
+            m.field(&format!("{k}.name"), s.name);
+            for (j, item) in s.items.iter().enumerate() {
+                let text = match item {
+                    ItemMatch::Any => "any".to_owned(),
+                    ItemMatch::One(one) => matcher(one),
+                    ItemMatch::OneOf(many) => {
+                        many.iter().map(matcher).collect::<Vec<_>>().join(" | ")
+                    }
+                };
+                m.field(&format!("{k}.item[{j}]"), &text);
+            }
+            for (j, f) in s.facts.iter().enumerate() {
+                m.field(
+                    &format!("{k}.facts[{j}]"),
+                    &format!("{} {}", f.offset, values(f.values)),
+                );
+            }
         }
     }
 

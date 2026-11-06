@@ -68,13 +68,17 @@ impl Recognizer {
     ///
     /// # Errors
     ///
-    /// `IllegalWord` for every frame word its schema refuses.
+    /// `IllegalWord` for every frame word its schema refuses; `Missing`
+    /// when the program has no recognizer.
     pub fn new(spec: &ProgramSpec) -> Result<Self, Vec<Finding>> {
-        let frame_dim = spec.dims[spec.frame_dim];
-        let layout = spec.frame;
+        let Some(framing) = spec.framing.as_ref() else {
+            return Err(vec![Finding::Missing { part: "recognizer" }]);
+        };
+        let frame_dim = spec.dims[framing.frame_dim];
+        let layout = framing.layout;
         let mut found = Vec::new();
-        let mut words = Vec::with_capacity(spec.sequences.len());
-        for (i, s) in spec.sequences.iter().enumerate() {
+        let mut words = Vec::with_capacity(framing.sequences.len());
+        for (i, s) in framing.sequences.iter().enumerate() {
             let key = SequenceId(i as u16).key();
             let mut per_offset = Vec::with_capacity(s.items.len());
             for (offset, facts) in s.facts.iter().enumerate() {
@@ -103,13 +107,13 @@ impl Recognizer {
             words.push(per_offset);
         }
         let recognizer = Self {
-            sequences: spec.sequences.clone(),
+            sequences: framing.sequences.clone(),
             words,
-            item_schema: *spec.dims[spec.item_dim].schema(),
+            item_schema: *spec.dims[framing.item_dim].schema(),
             frame_dim,
             boundary: layout.boundary,
             boundary_bit: layout.boundary_bit,
-            end_word: spec.end_word,
+            end_word: framing.end_word,
         };
         for (s, per_offset) in recognizer.words.iter().enumerate() {
             for word in per_offset {

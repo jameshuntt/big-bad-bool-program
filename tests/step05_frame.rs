@@ -47,7 +47,7 @@ fn async_fn_foo_gives_foo_s1_offset_2() {
     assert_eq!(word.role(), 1, "DeclaredIdentity");
     assert_eq!(word.modifier(), 1, "Async");
     assert_eq!(word.marks(), 0b10, "params_follow, no boundary");
-    let frame = spec.dimension(spec.frame_dimension()).unwrap();
+    let frame = spec.dimension(spec.frame_dimension().unwrap()).unwrap();
     assert_eq!(
         frame.describe(found[0].word),
         "{sequence=AsyncFnHead, offset=2, position=Interior, marks=params_follow, construct=FunctionDeclaration, role=DeclaredIdentity, modifier=Async}"

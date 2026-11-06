@@ -97,7 +97,7 @@ impl ProjectionState {
             .iter()
             .enumerate()
             .map(|(i, d)| match d.role() {
-                DimensionRole::Evidence if i == spec.frame_dim => Some(frame),
+                DimensionRole::Evidence if Some(i) == spec.frame_dim() => Some(frame),
                 DimensionRole::Evidence => observation.word(DimensionId(i as u16)),
                 DimensionRole::State if d.stack_depth().is_some() => self.stacks[i].last().copied(),
                 DimensionRole::State => Some(self.words[i]),

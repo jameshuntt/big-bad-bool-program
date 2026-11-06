@@ -154,10 +154,10 @@ pub enum Finding {
         /// The dimension.
         dimension: &'static str,
     },
-    /// A part every program needs.
+    /// A part the program needs: containment always, a recognizer only where one is asked for.
     #[liaise(code = 11, msg = "the program has no {part}", evidence(part))]
     Missing {
-        /// `recognizer` or `containment`.
+        /// `containment`, or `recognizer` from `Recognizer::new` on a program without one.
         part: &'static str,
     },
     /// A sequence with no items.

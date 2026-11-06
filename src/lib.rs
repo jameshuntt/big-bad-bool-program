@@ -18,6 +18,7 @@
 
 mod codes;
 mod contract;
+mod frame;
 mod model;
 mod step;
 #[cfg(test)]
@@ -25,6 +26,7 @@ mod test_support;
 
 pub use codes::{Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
+pub use frame::{FrameFacts, Recognizer};
 pub use model::{
     Clause, ContainmentSpec, ContractId, ContractSpec, DimensionId, DimensionRole, DimensionSpec,
     ItemMatch, MAX_SEQUENCE_LEN, Observation, OffsetFacts, Position, Program, ProgramBuilder,

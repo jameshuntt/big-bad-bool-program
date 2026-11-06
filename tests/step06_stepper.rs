@@ -245,9 +245,10 @@ fn legal_next_is_read_only_and_follows_state() {
             .map(|o| o.word(common::TOKEN).unwrap())
             .collect()
     };
+    // The end item is not pushed: only finish steps it.
     assert_eq!(
         kinds(stepper.legal_next()),
-        [common::KW_ASYNC, common::KW_FN, common::END]
+        [common::KW_ASYNC, common::KW_FN]
     );
     let before = stepper.state().clone();
     let _ = stepper.legal_next();

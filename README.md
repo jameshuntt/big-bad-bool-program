@@ -141,6 +141,12 @@ Rules worth knowing:
   not evidence, for the frame dimension, or for no dimension is `Evidence`; a
   word its schema refuses is `IllegalWord`. A refused observation holds no
   evidence for its neighbours' windows either.
+- The recognizer's end word is the end of input, not an input. Only `finish`
+  makes and steps the end item. An observation whose item is the end word is
+  refused on `push` with `Evidence` ("the end word is reserved for
+  `finish`"): it commits nothing, and the stream goes on, or stops, from the
+  state before it. The verifier evaluates the end item and does not follow
+  its successor, so the two agree.
 - Every match is a frame interpretation. A match inside a longer one is kept
   beside it. Contracts are evaluated under each interpretation, or under none
   when there is none.
@@ -193,6 +199,7 @@ BLESS_GOLDEN=1 cargo test       # rewrites tests/golden/*; review the diff befor
 | `tests/correction2_evidence.rs` | Three independent evidence dimensions in one contract; absent evidence reads as nothing; observations hold only observed evidence; the verifier reads every evidence dimension |
 | `tests/correction3_actualization.rs` | Contracts writing different dimensions and emitting independent effects actualize together; identical writes count once; conflicting writes are refused; results do not depend on declaration order; the fan-out limit |
 | `tests/correction4_overlap.rs` | Contained and overlapping matches coexist; left and right context still decide; contradictory facts are listed and, when relied on together, refused; the section 16 examples still work |
+| `tests/correction6_end_word.rs` | A pushed end word is refused, writes no state and opens no path, on skip and on stop; `finish` still steps the end item; the verifier's end-item treatment and the stepper agree |
 | `tests/correction5_evidence_domain.rs` | Conflicts that only unlabelled values show (overlapping ranges, masks, intersections of several contracts, two evidence dimensions together) are found; labelled words keep their behaviour; over every legal observation the domain gives every contract outcome, and the stepper shows no conflict the verifier did not report |
 | `src/verify/domain.rs` (unit) | On two tiny schemas, for 1,900 random clause sets, the domain gives exactly the matcher answers brute force over every legal word gives |
 | `src/step/authorize.rs` (unit) | Merging, conflicts on fields, stacks, effects and frame facts, fan-out and candidate limits |

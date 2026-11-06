@@ -447,7 +447,8 @@ pub enum Refusal {
         /// The dimension.
         dimension: &'static str,
     },
-    /// An observation word the program does not take. The observation
+    /// An observation word the program does not take, including the end
+    /// word on the item dimension, which only `finish` steps. The observation
     /// counts as holding no evidence, for its own step and for its neighbours' windows.
     #[liaise(
         code = 108,

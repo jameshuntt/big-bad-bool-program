@@ -2,7 +2,8 @@
 
 ## Corrective pass (unreleased, not published)
 
-James's four corrections of 2026-11-06, then the evidence-domain pass.
+James's four corrections of 2026-11-06, then the evidence-domain pass, then
+the final core-correctness pass (6 to 8).
 Module boundaries and authority rules are unchanged: only `verify` builds a
 `VerifiedProgram`, only `step::authorize` builds an `AuthorizedTransition`,
 only `step::commit` writes state, observers get shared references and return
@@ -147,6 +148,38 @@ verify and still refuse with `Conflict` at run time. Two contracts on
   outcome a legal observation gives) and the unit tests in
   `src/verify/domain.rs`, which compare the domain with brute force over
   every legal word of two tiny schemas for 1,900 random clause sets.
+
+### 6. The end word is the end of input
+
+Why: the verifier treats the recognizer's end word as terminal. It
+evaluates the end item but does not follow the state it commits to. The
+stepper accepted the same word as ordinary pushed evidence and went on
+stepping from what it committed, so a pushed end word could reach states
+the verifier never visited. On the program in
+`tests/correction6_end_word.rs` the verifier reports `Closed` unreachable,
+yet pushing `Close` mid-stream committed `close` and moved the phase to
+`Closed`.
+
+- `Stepper::push` refuses an observation whose item dimension holds exactly
+  the end word: `Evidence` (`BBBC0108`) with the rule "the end word is
+  reserved for `finish`", at the observation's own step. Like any refused
+  observation it commits nothing, holds no evidence for its neighbours'
+  windows, and the stream goes on (`SkipObservation`) or stops (`Stop`) from
+  the state before it.
+- `finish` makes and steps the end item exactly as before.
+- `legal_next` leaves out observations whose item is the end word, since
+  `push` refuses them. `VerifiedProgram::inputs` still holds them: the state
+  search evaluates the end item as `finish` steps it, and does not follow its
+  successor.
+- Behaviour change: at the start of section 16 `legal_next` is `async` and
+  `fn`; it no longer lists the end item (`tests/step06_stepper.rs` updated).
+  Every golden, the digest, core-1o and klepto are unchanged.
+- Proof: `tests/correction6_end_word.rs`:
+  `an_end_word_pushed_mid_stream_is_refused`,
+  `an_injected_end_word_changes_no_state_and_opens_no_path`,
+  `finish_still_steps_the_end_item`,
+  `verifier_and_runtime_agree_on_the_end_word`. Against the previous commit
+  the first, second and fourth fail: the pushed end word committed `close`.
 
 ## 0.1.0 (unreleased, not published)
 

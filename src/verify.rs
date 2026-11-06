@@ -675,7 +675,8 @@ fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
 /// holds no item). Each input goes through what the stepper does: the
 /// interpretations limit, `gather`, `authorize` and `commit`. The
 /// successor of a state is what commit gives; the end item's successors are
-/// not followed. Returns the number of states visited.
+/// not followed, because at run time only `finish` steps the end item, as
+/// the last step (`push` refuses it). Returns the number of states visited.
 fn search(
     spec: &ProgramSpec,
     index: &ContractIndex,

@@ -10,12 +10,19 @@
 //! Admission happens on `push`. An observation holding a word for a
 //! dimension that is not observed evidence, or a word its schema refuses, is
 //! refused at its own step and holds no evidence for its neighbours' windows.
+//!
+//! The recognizer's end word is the end of input, not an input: only
+//! `finish` produces it. An observation whose item is the end word is refused
+//! on `push` (`Evidence`, "the end word is reserved for `finish`"), so it
+//! commits nothing and the stream goes on, or stops, from the state before
+//! it. This is what the verifier models: it evaluates the end item and does
+//! not follow its successor.
 
 use std::collections::VecDeque;
 
 use crate::codes::Refusal;
 use crate::frame::FrameFacts;
-use crate::model::{ContractId, DimensionRole, Observation, ProgramSpec, RefusalRule};
+use crate::model::{ContractId, DimensionId, DimensionRole, Observation, ProgramSpec, RefusalRule};
 use crate::observe::{Observer, StepEvent};
 use crate::step::authorize::{Gathered, authorize, gather};
 use crate::step::commit::{check, commit};
@@ -71,6 +78,8 @@ impl<'p, O: Observer> Stepper<'p, O> {
 
     /// Adds one observation and steps every position it completes the window for.
     /// After a `Stop` refusal or after `finish`, nothing more is stepped.
+    /// An observation whose item is the recognizer's end word is refused at
+    /// its own step with `Evidence`: the end word is reserved for `finish`.
     pub fn push(&mut self, observation: Observation) -> Vec<StepResult> {
         if self.halted || self.finished {
             return Vec::new();
@@ -87,8 +96,9 @@ impl<'p, O: Observer> Stepper<'p, O> {
         results
     }
 
-    /// Steps every remaining position, then the end item. A program
-    /// without a recognizer has no end item and nothing left to step.
+    /// Steps every remaining position, then the end item. The end item is
+    /// made here, never pushed. A program without a recognizer has no end
+    /// item and nothing left to step.
     pub fn finish(&mut self) -> Vec<StepResult> {
         if self.finished {
             return Vec::new();
@@ -129,6 +139,8 @@ impl<'p, O: Observer> Stepper<'p, O> {
     /// authorize at the next focal position, from the current state, under
     /// some full set of frame interpretations the recognizer can give the
     /// item. Each is one of [`VerifiedProgram::inputs`], at the next position.
+    /// The end item is never among them: `push` refuses it, only `finish`
+    /// steps it.
     /// Read only: prediction may rank this set, never add to it.
     #[must_use]
     pub fn legal_next(&self) -> Vec<Observation> {
@@ -139,6 +151,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
         program
             .inputs()
             .iter()
+            .filter(|input| !is_end(spec, input))
             .map(|input| at(next, input))
             .filter(|input| {
                 let ids = program.index().lookup(input);
@@ -284,6 +297,19 @@ impl<'p, O: Observer> Stepper<'p, O> {
     }
 }
 
+/// Whether `word` on dimension `id` is the recognizer's end word.
+fn is_end_word(spec: &ProgramSpec, id: DimensionId, word: u128) -> bool {
+    spec.item_dimension() == Some(id) && spec.end_word() == Some(word)
+}
+
+/// Whether `observation`'s item is the recognizer's end word.
+fn is_end(spec: &ProgramSpec, observation: &Observation) -> bool {
+    observation
+        .evidence()
+        .iter()
+        .any(|&(id, word)| is_end_word(spec, id, word))
+}
+
 /// `input`'s evidence at `position`.
 fn at(position: u32, input: &Observation) -> Observation {
     input
@@ -293,7 +319,9 @@ fn at(position: u32, input: &Observation) -> Observation {
 }
 
 /// Checks every word an observation holds: the dimension exists, is
-/// evidence, is not written by the recognizer, and flaga_solver accepts the word.
+/// evidence, is not written by the recognizer, is not the end word on the
+/// item dimension (only `finish` steps the end item), and flaga_solver
+/// accepts the word.
 fn admit(spec: &ProgramSpec, observation: &Observation) -> Result<(), Refusal> {
     let position = observation.position();
     for &(id, word) in observation.evidence() {
@@ -314,6 +342,9 @@ fn admit(spec: &ProgramSpec, observation: &Observation) -> Result<(), Refusal> {
         }
         if !spec.is_observed(id) {
             return Err(refuse("the recognizer writes this dimension"));
+        }
+        if is_end_word(spec, id, word) {
+            return Err(refuse("the end word is reserved for `finish`"));
         }
         check(position, dim, word)?;
     }

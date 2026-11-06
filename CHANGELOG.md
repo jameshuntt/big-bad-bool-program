@@ -1,5 +1,107 @@
 # Changelog
 
+## Corrective pass (unreleased, not published)
+
+James's four corrections of 2026-11-06. Module boundaries and authority rules
+are unchanged: only `verify` builds a `VerifiedProgram`, only
+`step::authorize` builds an `AuthorizedTransition`, only `step::commit` writes
+state, observers get shared references and return nothing.
+
+### 1. Framing is optional
+
+- `ProgramBuilder::build` no longer requires a recognizer. Without one a
+  program is dimensions, contracts and containment; the window radius is
+  zero, each push steps its own position, and `finish` has no end item.
+- `ProgramSpec::recognizer`, `item_dimension`, `frame_dimension` and
+  `end_word` return `Option`. `VerifiedProgram::recognizer` returns `Option`.
+  `Recognizer::new` on a program without one is `Missing { part: "recognizer" }`.
+- The digest material has no `recognizer.` lines without a recognizer; with
+  one it is unchanged.
+- Behaviour change: `build` no longer reports `Missing { part: "recognizer" }`
+  (`tests/step01_model.rs` updated).
+- Proof: `tests/correction1_contract_only.rs`. Framed goldens and the digest
+  were unchanged by this commit.
+
+### 2. Any evidence dimension takes runtime values
+
+- `Observation` is now a position and one word per evidence dimension it
+  holds: `Observation::new(position).with(dimension, word)` or
+  `.with_word(dimension, packed_value)`; `position()`, `word()`, `evidence()`.
+  Its fields are private. The recognizer's item word is the item dimension's
+  word in it.
+- A dimension an observation does not hold reads as nothing. The stepper
+  admits each observation on `push`: a word for a non-evidence dimension, the
+  frame dimension or no dimension is the new refusal `Evidence` (`BBBC0108`);
+  a word its schema refuses is `IllegalWord`. A refused observation holds no
+  evidence for its neighbours' windows.
+- `ProgramSpec::is_observed` names the dimensions an observation may hold.
+  The contract index keys on any observed evidence dimension.
+- The verifier tries every combination of observed evidence dimensions (each
+  absent or at a labelled word), bounded by `max_witness_tries`.
+  `VerifiedProgram::item_words` is replaced by `inputs`; `legal_next` returns
+  `Vec<Observation>`.
+- Behaviour change: the input universe is now bounded by `max_witness_tries`,
+  not `max_states`; a conflict witness names its evidence as
+  `evidence=token={..}` instead of `item={..}`.
+- Proof: `tests/correction2_evidence.rs`. Section 16 goldens and digest were
+  unchanged by this commit.
+
+### 3. Compatible contracts actualize together
+
+- `authorize` lets every distinct candidate contract actualize, and merges
+  their writes into one plan: equal field values count once, different values
+  are the new refusal `Conflict` (`BBBC0109`); contracts touching one stacked
+  dimension must carry equal stack ops on it (applied once); emits merge into
+  one effect word per effect dimension. Contracts are merged in name order and
+  the plan is kept in dimension and field order, so results do not depend on
+  declaration order. Contract refusals with `NoContract` come in name order.
+- New limit `ContainmentSpec::max_actualized` (limit name `actualized`). An
+  exactly-one policy is `max_actualized = 1`.
+- `AuthorizedTransition::contract` is replaced by `contracts`;
+  `StepResult::committed` is `Vec<ContractId>`; `StepEvent::Authorized`
+  carries `&[ContractId]`. The bowl adapter puts the count in `PayloadRef.len`.
+- The verifier's ambiguity check is now the same `authorize` call: finding
+  `Conflict` (`BBBC0030`). Retired codes: `Refusal::Ambiguous` (`BBBC0103`) and
+  `Finding::Ambiguous` (`BBBC0021`).
+- Commit checks changed words once, after the writes of all actualized
+  contracts; effects come in effect-dimension order.
+- Golden change: `tests/golden/step07_section16.digest`, because the material
+  carries `containment.max_actualized` and `SPEC_FORMAT` is now
+  `big-bad-bool-contract.spec.v2`.
+- Proof: `tests/correction3_actualization.rs`, unit tests in
+  `src/step/authorize.rs` and `src/step/commit.rs`
+  (`merged_writes_are_checked_as_one_word`), and two new compile-fail cases.
+
+### 4. Overlapping recognitions are kept
+
+- The recognizer keeps every match; nothing is dropped because a longer match
+  contains it. Positions, boundary, offsets and sequence keys are as before.
+- `FrameFacts` is the placement (sequence, offset, word); `Candidate::frame`
+  and `FactView::new`/`frame` carry it instead of a `SequenceId`.
+- Contradictions are decided in `step::authorize`, deterministically:
+  actualizing contracts that read one frame field under interpretations whose
+  sequences declare different values for it are `Conflict`. A field a
+  sequence does not declare constrains nothing, so a longer sequence refines a
+  shorter one.
+- The verifier lists every pair of sequence offsets that can hold one focal
+  item with different declared values: finding `OverlappingFacts`
+  (`BBBC0031`, info). Its state search now feeds each input with each exact
+  set of matches its item can have (`Recognizer` computes them), through the
+  stepper's own `gather`, `authorize` and `commit`; `legal_next` uses the same
+  sets. Retired code: `OverlappingSequences` (`BBBC0027`).
+  `ContainedSequence` stays info and now says both matches are kept.
+- Behaviour change, section 16: at `fn`, `foo` and `(` of `async fn foo(`
+  FnHead now frames beside AsyncFnHead. At `fn` fn-head-begin (via FnHead) and
+  fn-keyword-after-modifier (via AsyncFnHead) actualize together; their writes
+  agree, so the state and every effect are as before. Golden changes:
+  `tests/golden/step06_async_fn_foo.txt` and
+  `tests/golden/step06_bar_foo_in_body.txt`. The section 16 report gains five
+  `OverlappingFacts` info findings and still visits 70 states.
+- Proof: `tests/correction4_overlap.rs`, unit tests
+  `frames::contracts_that_read_contradictory_facts_conflict` and
+  `frames::facts_nobody_reads_or_nobody_declares_coexist` in
+  `src/step/authorize.rs`; core-1o (37 fixtures) and klepto still agree.
+
 ## 0.1.0 (unreleased, not published)
 
 First build of the approved architecture report (sections 9 to 24), steps 1 to 11

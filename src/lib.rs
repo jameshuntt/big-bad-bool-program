@@ -1,16 +1,18 @@
 //! Contracts across Big Bad Bool packed words.
 //!
 //! A program is a list of dimensions (each one `#[bitpack]` type with a role),
-//! a frame recognizer over declared sequences, contracts between dimensions,
-//! and containment limits. `build` resolves names. `verify` checks coherence
-//! once and returns a verified program. The stepper takes a verified program
-//! and a stream of observations, and only its commit step writes state.
+//! contracts between dimensions, containment limits, and, optionally, a frame
+//! recognizer over declared sequences. `build` resolves names. `verify`
+//! checks coherence once and returns a verified program. The stepper takes a
+//! verified program and a stream of observations, each holding words for any
+//! of the program's evidence dimensions. Every compatible contract at a
+//! position actualizes together, and only the commit step writes state.
 //!
 //! The crate never names a language. Every name below a dimension comes from
 //! the user's `#[bitpack]` labels and sequence specs.
 //!
 //! Modules are future crate boundaries:
-//! `codes` <- `model` <- (`frame`, `contract`) <- `step` <- `verify` (+ `digest`)
+//! `codes` <- `model` <- `frame` <- `contract` <- `step` <- `verify` (+ `digest`)
 //! <- `observe` <- `stepper`, and the `bowl` adapter on top.
 
 #![forbid(unsafe_code)]

@@ -14,7 +14,7 @@ use crate::step::{Effect, ProjectionState};
 pub enum StepEvent<'a> {
     /// The focal item. The end item has the position after the last observation.
     Observed(&'a Observation),
-    /// The frame interpretations of the focal item, after longest-match.
+    /// The frame interpretations of the focal item: every match, in sequence and offset order.
     Framed(&'a [FrameFacts]),
     /// A contract held under one interpretation.
     Candidate(&'a Candidate),

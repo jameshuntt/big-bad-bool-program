@@ -395,7 +395,7 @@ pub enum RefusalRule {
 /// Containment limits, applied at every position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContainmentSpec {
-    /// Frame interpretations per position, after longest-match.
+    /// Frame interpretations per position. Every match counts; none is dropped for its length.
     pub max_interpretations: u8,
     /// Candidates per position: contract and frame pairs, before merging.
     pub max_candidates: u8,

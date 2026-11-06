@@ -6,7 +6,7 @@ use crate::codes::Refusal;
 /// A counted quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Limit {
-    /// Frame interpretations at one position, after longest-match.
+    /// Frame interpretations at one position: every match.
     Interpretations,
     /// Candidates at one position: contract and frame pairs, before merging.
     Candidates,

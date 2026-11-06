@@ -19,6 +19,9 @@
 mod codes;
 mod contract;
 mod model;
+mod step;
+#[cfg(test)]
+mod test_support;
 
 pub use codes::{Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
@@ -28,6 +31,7 @@ pub use model::{
     ProgramSpec, RecognizerSpec, RefusalRule, SequenceId, SequenceSpec, StackOp, Write, clause,
     contract, dimension, pop, push, sequence, set,
 };
+pub use step::{AuthorizedTransition, Effect, ProjectionState};
 
 pub use big_bad_bool_interact::{FieldMatcher, FieldValue, MatchOp};
 pub use flaga_solver::Schema;

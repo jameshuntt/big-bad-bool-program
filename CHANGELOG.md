@@ -2,10 +2,11 @@
 
 ## Corrective pass (unreleased, not published)
 
-James's four corrections of 2026-11-06. Module boundaries and authority rules
-are unchanged: only `verify` builds a `VerifiedProgram`, only
-`step::authorize` builds an `AuthorizedTransition`, only `step::commit` writes
-state, observers get shared references and return nothing.
+James's four corrections of 2026-11-06, then the evidence-domain pass.
+Module boundaries and authority rules are unchanged: only `verify` builds a
+`VerifiedProgram`, only `step::authorize` builds an `AuthorizedTransition`,
+only `step::commit` writes state, observers get shared references and return
+nothing.
 
 ### 1. Framing is optional
 
@@ -101,6 +102,51 @@ state, observers get shared references and return nothing.
   `frames::contracts_that_read_contradictory_facts_conflict` and
   `frames::facts_nobody_reads_or_nobody_declares_coexist` in
   `src/step/authorize.rs`; core-1o (37 fixtures) and klepto still agree.
+
+### 5. The verifier's evidence domain follows the matchers
+
+Why: the stepper accepts any evidence word its schema accepts, labelled or
+not, but the verifier tried only combinations of labelled values (the default
+where a field had none). A range, a mask, or the intersection of several
+contracts' clauses can hold only on values with no label, so a program could
+verify and still refuse with `Conflict` at run time. Two contracts on
+`level in 6..=11` and `level in 10..=15`, with labels only at 0, 6, 7, 8 and
+15, verified and then conflicted on level 10.
+
+- Each observed evidence dimension now has an evidence domain built from the
+  predicates that read it (new private module `src/verify/domain.rs`). For
+  each field, every contract clause on it (WHEN, REQUIRE, REQUIRE-ANY and
+  FORBID; `Eq`, `NotEq`, ranges, mask-all and mask-any, with flag-field labels
+  through `Schema::holds` as at run time), every recognizer item matcher on
+  the item dimension, the end item, and the field's invalid and reserved
+  ranges and the labels its requires and conflicts relations test, split the
+  field's values into classes. The classes are found by splitting regions of
+  values, without listing them, so the cost follows the clauses, not the
+  number of values a field can hold.
+- A field's domain values are its labelled values (its default when it has
+  none) plus one value the search finds in each class none of them is in. The
+  dimension's domain is every combination, kept when flaga_solver accepts it.
+  Matcher answers and legality are both fixed by the class of each field, so
+  this is one legal word for every class combination a legal word can have:
+  the domain gives exactly the matcher answers the legal words give.
+- `verify`, `satisfiable`, the sequence checks, the recognizer's frame sets
+  and the state search all read the new domain in place of the labelled
+  words. The domain is bounded by `max_witness_tries` as before; past it
+  verification stops with `TooManyStates`, never with a smaller domain.
+- Behaviour change: `VerifiedProgram::inputs` and `legal_next` can hold
+  unlabelled words; a contract that holds only on unlabelled values is no
+  longer `Unsatisfiable` or `DeadContract`; conflicts that only unlabelled
+  values show are now `Conflict` findings. Where every class already holds a
+  labelled value the domain is the labelled words, in the same order: every
+  golden, the digest, section 16 (70 states), core-1o and klepto are
+  unchanged.
+- Proof: `tests/correction5_evidence_domain.rs` (overlapping ranges, masks,
+  intersections of three contracts, two evidence dimensions together,
+  labelled words unchanged, the stepper over every legal observation shows no
+  conflict the verifier did not report, and the domain gives every contract
+  outcome a legal observation gives) and the unit tests in
+  `src/verify/domain.rs`, which compare the domain with brute force over
+  every legal word of two tiny schemas for 1,900 random clause sets.
 
 ## 0.1.0 (unreleased, not published)
 

@@ -165,9 +165,16 @@ Rules worth knowing:
   dimension's position field must use them. The sequence key is the sequence
   index plus one.
 - The verifier's state search feeds each evidence combination (each observed
-  dimension absent or at a labelled word) with each exact set of matches its
-  item can have, through the stepper's own `gather`, `authorize` and `commit`.
-  So a verified program never refuses with `Conflict` at run time.
+  dimension absent or at a word of its evidence domain) with each exact set of
+  matches its item can have, through the stepper's own `gather`, `authorize`
+  and `commit`. The evidence domain comes from the matchers, not the labels:
+  each field's values are split into classes by every predicate that reads
+  the field (contract clauses, item matchers, the end item, and the invalid,
+  reserved, requires and conflicts rules), and the domain holds one legal word
+  for every combination of classes a legal word can have, beside every
+  labelled word. A legal word with no label therefore gives the same matcher
+  answers as some domain word, and a verified program never refuses with
+  `Conflict` at run time.
 
 ## Tests
 
@@ -186,6 +193,8 @@ BLESS_GOLDEN=1 cargo test       # rewrites tests/golden/*; review the diff befor
 | `tests/correction2_evidence.rs` | Three independent evidence dimensions in one contract; absent evidence reads as nothing; observations hold only observed evidence; the verifier reads every evidence dimension |
 | `tests/correction3_actualization.rs` | Contracts writing different dimensions and emitting independent effects actualize together; identical writes count once; conflicting writes are refused; results do not depend on declaration order; the fan-out limit |
 | `tests/correction4_overlap.rs` | Contained and overlapping matches coexist; left and right context still decide; contradictory facts are listed and, when relied on together, refused; the section 16 examples still work |
+| `tests/correction5_evidence_domain.rs` | Conflicts that only unlabelled values show (overlapping ranges, masks, intersections of several contracts, two evidence dimensions together) are found; labelled words keep their behaviour; over every legal observation the domain gives every contract outcome, and the stepper shows no conflict the verifier did not report |
+| `src/verify/domain.rs` (unit) | On two tiny schemas, for 1,900 random clause sets, the domain gives exactly the matcher answers brute force over every legal word gives |
 | `src/step/authorize.rs` (unit) | Merging, conflicts on fields, stacks, effects and frame facts, fan-out and candidate limits |
 | `tests/step01_model.rs` | Dimensions resolve by name; bad clauses give interact's `validate_rule_table` findings one for one; role rules |
 | `tests/step02_contract.rs` | WHEN, REQUIRE, REQUIRE-ANY, FORBID; flag-field labels through `Schema::holds` |

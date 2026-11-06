@@ -4,6 +4,16 @@
 //! recognizer and the contract index, checks every word the spec fixes with
 //! flaga_solver, and answers the coherence questions. The stepper never calls
 //! this module; it only takes what it returns.
+//!
+//! The searches try each observed evidence dimension absent or at one word
+//! of its evidence domain. The domain is built from the matchers, not from
+//! the labels: each field's values are split into classes by every predicate
+//! that reads the field (contract clauses, recognizer item matchers, the end
+//! item, and the invalid, reserved, requires and conflicts rules
+//! flaga_solver checks), and the domain holds one legal word for every
+//! combination of classes a legal word can have, beside every labelled
+//! word. So any legal runtime word gives the same matcher answers as some
+//! domain word, labelled or not.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
@@ -21,6 +31,8 @@ use crate::model::{
 use crate::step::ProjectionState;
 use crate::step::authorize::{authorize, gather};
 use crate::step::commit::commit;
+
+mod domain;
 
 /// Bounds on the verifier's searches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,7 +175,9 @@ impl VerifiedProgram {
 
     /// Every observation the state search tried and `legal_next` draws
     /// from, at position 0: each observed evidence dimension absent or at
-    /// one of its labelled words.
+    /// one of its domain words. A dimension's domain holds every labelled
+    /// word and one legal word for each distinct set of matcher answers a
+    /// legal word can give (see the module notes).
     #[must_use]
     pub fn inputs(&self) -> &[Observation] {
         &self.inputs
@@ -185,50 +199,16 @@ impl VerifiedProgram {
     }
 }
 
-/// Every combination of each field's labelled values (a field with no labels
-/// keeps its default), filtered by flaga_solver. `None` past `cap` words.
-fn labelled_words(dim: &DimensionSpec, cap: u128) -> Option<Vec<u128>> {
-    let schema = dim.schema();
-    let default = dim.default_word();
-    let mut words = vec![default];
-    for field in schema.fields {
-        let mut values: Vec<u128> = schema
-            .labels
-            .iter()
-            .filter(|l| l.field == field.name)
-            .map(|l| l.value)
-            .collect();
-        if values.is_empty() {
-            values.push(field_value(field, default));
-        }
-        values.sort_unstable();
-        values.dedup();
-        if (words.len() as u128).saturating_mul(values.len() as u128) > cap {
-            return None;
-        }
-        words = words
-            .iter()
-            .flat_map(|w| {
-                values
-                    .iter()
-                    .map(move |v| (w & !field.mask) | (v << field.shift))
-            })
-            .collect();
-    }
-    words.retain(|w| flaga_solver::check(schema, *w).is_ok_ignoring_deprecated());
-    Some(words)
-}
-
 /// Every observation the search tries: each observed evidence dimension
-/// absent or at one of its labelled words, at position 0. `None` past `cap`.
+/// absent or at one of its domain words, at position 0. `None` past `cap`.
 fn evidence_inputs(
     spec: &ProgramSpec,
-    labelled: &[Vec<u128>],
+    domain: &[Vec<u128>],
     cap: u128,
 ) -> Option<Vec<Observation>> {
     let mut out = vec![Observation::new(0)];
     for d in spec.observed() {
-        let words = &labelled[d];
+        let words = &domain[d];
         if (out.len() as u128).saturating_mul(words.len() as u128 + 1) > cap {
             return None;
         }
@@ -329,20 +309,20 @@ pub fn verify(
         });
         Err(report)
     };
-    let mut labelled = vec![Vec::new(); spec.dims.len()];
+    let mut evidence = vec![Vec::new(); spec.dims.len()];
     for d in spec.observed() {
-        match labelled_words(&spec.dims[d], tries) {
-            Some(words) => labelled[d] = words,
+        match domain::evidence_words(&spec, d, tries) {
+            Some(words) => evidence[d] = words,
             None => return too_many(report),
         }
     }
-    let Some(inputs) = evidence_inputs(&spec, &labelled, tries) else {
+    let Some(inputs) = evidence_inputs(&spec, &evidence, tries) else {
         return too_many(report);
     };
     let index = ContractIndex::new(&spec);
     let mut frame_sets = BTreeMap::new();
     if let (Some(item_dim), Some(recognizer)) = (spec.item_dim(), &recognizer) {
-        let items = &labelled[item_dim];
+        let items = &evidence[item_dim];
         sequences(&spec, item_dim, items, &mut report.findings);
         let mut choices = items.clone();
         choices.extend(spec.end_word().filter(|w| !items.contains(w)));
@@ -364,7 +344,7 @@ pub fn verify(
         )
         .collect();
     for c in 0..spec.resolved.len() {
-        satisfiable(&spec, c, &labelled, &frames, limits, &mut report.findings);
+        satisfiable(&spec, c, &evidence, &frames, limits, &mut report.findings);
     }
     report.states = search(
         &spec,
@@ -541,12 +521,12 @@ fn state_witnesses(
 
 /// Finds a contract none of whose REQUIRE-ANY choices has a witness word in
 /// every dimension it reads. Observed evidence words come from each
-/// dimension's labelled words, frame words from what the recognizer can
+/// dimension's evidence domain, frame words from what the recognizer can
 /// produce, state words from the fields the clauses name.
 fn satisfiable(
     spec: &ProgramSpec,
     contract: usize,
-    labelled: &[Vec<u128>],
+    domain: &[Vec<u128>],
     frames: &[u128],
     limits: VerifyLimits,
     found: &mut Vec<Finding>,
@@ -584,7 +564,7 @@ fn satisfiable(
                     && !neg.iter().any(|cl| cl.holds(dim.schema(), w))
             };
             let witnessed = if spec.is_observed(DimensionId(d as u16)) {
-                labelled[d].iter().any(|w| fits(*w))
+                domain[d].iter().any(|w| fits(*w))
             } else if Some(d) == spec.frame_dim() {
                 frames.iter().any(|w| fits(*w))
             } else {

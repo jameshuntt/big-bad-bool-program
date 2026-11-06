@@ -6,7 +6,7 @@ use crate::model::{ContractId, ProgramSpec, ResolvedStackOp};
 use crate::step::commit::ProjectionState;
 use crate::step::limits::{Limit, within};
 
-/// The one candidate containment let through. Only [`authorize`] builds one,
+/// The one candidate containment let through. Only `step::authorize` builds one,
 /// and only commit consumes it. It is not `Clone`: it is used once.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AuthorizedTransition {

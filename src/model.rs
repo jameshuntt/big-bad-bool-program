@@ -65,7 +65,7 @@ fn patch_raw<T: PackedWord>(raw: u128, values: &[FieldValue]) -> Result<u128, Re
     patch_word(word, values).map(PackedWord::raw_u128)
 }
 
-/// One `#[bitpack]` type with a name and a role. Build it with [`dimension!`](crate::dimension).
+/// One `#[bitpack]` type with a name and a role. Build it with [`dimension!`](crate::dimension!).
 #[derive(Debug, Clone, Copy)]
 pub struct DimensionSpec {
     name: &'static str,
@@ -76,7 +76,7 @@ pub struct DimensionSpec {
 }
 
 /// A dimension over the packed word `T`. `schema` must be `schema_of!(T)`;
-/// the [`dimension!`](crate::dimension) macro passes both from one type.
+/// the [`dimension!`](crate::dimension!) macro passes both from one type.
 #[must_use]
 pub const fn dimension<T: PackedWord>(
     name: &'static str,
@@ -718,7 +718,8 @@ pub struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    /// Adds a dimension.
+    /// Adds a dimension. The name is the report's assembly verb, not `ops::Add`.
+    #[allow(clippy::should_implement_trait)]
     #[must_use]
     pub fn add(mut self, dimension: DimensionSpec) -> Self {
         self.dims.push(dimension);

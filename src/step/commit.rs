@@ -9,7 +9,9 @@
 use big_bad_bool_interact::ReconstructionError;
 
 use crate::codes::Refusal;
-use crate::model::{DimensionId, DimensionRole, DimensionSpec, ProgramSpec, ResolvedStackOp};
+use crate::model::{
+    DimensionId, DimensionRole, DimensionSpec, Observation, ProgramSpec, ResolvedStackOp,
+};
 use crate::step::authorize::AuthorizedTransition;
 
 /// The committed words: one per dimension, and one bounded stack per stacked
@@ -81,31 +83,25 @@ impl ProjectionState {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// One word per dimension for a fact view: `item` for the item dimension,
-    /// `frame` for the frame dimension, each state word (the top entry when
-    /// stacked, `None` when the stack is empty), and `None` for every other
-    /// dimension.
+    /// One word per dimension for a fact view: the observation's word for
+    /// each evidence dimension it holds, `frame` for the frame dimension,
+    /// each state word (the top entry when stacked, `None` when the stack is
+    /// empty), and `None` for every other dimension.
     pub(crate) fn fact_words(
         &self,
         spec: &ProgramSpec,
-        item: u128,
+        observation: &Observation,
         frame: u128,
     ) -> Vec<Option<u128>> {
         spec.dims
             .iter()
             .enumerate()
-            .map(|(i, d)| {
-                if i == spec.item_dim {
-                    Some(item)
-                } else if i == spec.frame_dim {
-                    Some(frame)
-                } else if d.role() != DimensionRole::State {
-                    None
-                } else if d.stack_depth().is_some() {
-                    self.stacks[i].last().copied()
-                } else {
-                    Some(self.words[i])
-                }
+            .map(|(i, d)| match d.role() {
+                DimensionRole::Evidence if i == spec.frame_dim => Some(frame),
+                DimensionRole::Evidence => observation.word(DimensionId(i as u16)),
+                DimensionRole::State if d.stack_depth().is_some() => self.stacks[i].last().copied(),
+                DimensionRole::State => Some(self.words[i]),
+                DimensionRole::Effect => None,
             })
             .collect()
     }
@@ -130,7 +126,8 @@ fn illegal(position: u32, dim: &DimensionSpec) -> impl Fn(ReconstructionError) -
     }
 }
 
-fn check(position: u32, dim: &DimensionSpec, word: u128) -> Result<(), Refusal> {
+/// flaga_solver's verdict on one word. Deprecated values pass.
+pub(crate) fn check(position: u32, dim: &DimensionSpec, word: u128) -> Result<(), Refusal> {
     let verdict = flaga_solver::check(dim.schema(), word);
     if verdict.is_ok_ignoring_deprecated() {
         Ok(())

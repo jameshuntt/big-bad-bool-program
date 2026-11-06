@@ -156,7 +156,7 @@ impl Observer for BowlObserver {
                 if self.published > 0 {
                     self.focal += 1;
                 }
-                self.position = o.position;
+                self.position = o.position();
                 self.contract = None;
             }
             StepEvent::Authorized(id) => self.contract = Some(*id),

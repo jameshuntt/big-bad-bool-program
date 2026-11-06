@@ -93,7 +93,7 @@ struct Frames {
 impl Observer for Frames {
     fn observe(&mut self, event: &StepEvent<'_>) {
         match event {
-            StepEvent::Observed(o) => self.position = o.position,
+            StepEvent::Observed(o) => self.position = o.position(),
             StepEvent::Framed(frames) => self
                 .words
                 .extend(frames.iter().map(|f| (self.position, f.word))),
@@ -117,10 +117,7 @@ fn step(program: &VerifiedProgram, path: &Path) -> Stepped {
     let mut stepper = Stepper::new(program, &mut frames);
     let mut results = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
-        results.extend(stepper.push(Observation {
-            position: i as u32,
-            item: t.kind,
-        }));
+        results.extend(stepper.push(Observation::new(i as u32).with(common::TOKEN, t.kind)));
     }
     results.extend(stepper.finish());
     assert!(

@@ -200,12 +200,12 @@ fn a_position_is_stepped_once_its_window_is_full() {
     let mut stepper = Stepper::new(&program, NoObserver);
     let observations = common::tokens(0, common::ASYNC_FN_FOO);
     for o in &observations[..3] {
-        assert!(stepper.push(*o).is_empty());
+        assert!(stepper.push(o.clone()).is_empty());
     }
-    let first = stepper.push(observations[3]);
+    let first = stepper.push(observations[3].clone());
     assert_eq!(first.iter().map(|r| r.position).collect::<Vec<_>>(), [0]);
     for o in &observations[4..] {
-        assert_eq!(stepper.push(*o).len(), 1);
+        assert_eq!(stepper.push(o.clone()).len(), 1);
     }
     let rest = stepper.finish();
     assert_eq!(
@@ -215,10 +215,7 @@ fn a_position_is_stepped_once_its_window_is_full() {
     assert!(stepper.finish().is_empty());
     assert!(
         stepper
-            .push(Observation {
-                position: 11,
-                item: 0
-            })
+            .push(Observation::new(11).with(common::TOKEN, 0))
             .is_empty()
     );
 }
@@ -227,8 +224,13 @@ fn a_position_is_stepped_once_its_window_is_full() {
 fn legal_next_is_read_only_and_follows_state() {
     let program = verified(common::CONTAINMENT);
     let mut stepper = Stepper::new(&program, NoObserver);
+    let kinds = |next: Vec<Observation>| -> Vec<u128> {
+        next.iter()
+            .map(|o| o.word(common::TOKEN).unwrap())
+            .collect()
+    };
     assert_eq!(
-        stepper.legal_next(),
+        kinds(stepper.legal_next()),
         [common::KW_ASYNC, common::KW_FN, common::END]
     );
     let before = stepper.state().clone();
@@ -247,7 +249,7 @@ fn legal_next_is_read_only_and_follows_state() {
     }
     // After `async`: phase FnHead.
     assert_eq!(
-        stepper.legal_next(),
+        kinds(stepper.legal_next()),
         [common::KW_ASYNC, common::KW_FN, common::IDENT]
     );
 }

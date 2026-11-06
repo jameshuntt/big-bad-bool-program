@@ -106,7 +106,7 @@ fn ambiguous_k1_k2_pair() {
         [&Finding::Ambiguous {
             first: "fn-head-begin",
             second: "fn-keyword-after-modifier",
-            witness: "context=[{scope=Module, expecting=Item, marks=none}] state={phase=FnHead, marks=can_declare} item={kind=KwFn} frame={sequence=FnHead, offset=0, position=Begin, marks=none, construct=FunctionDeclaration, role=None, modifier=None}".to_owned(),
+            witness: "context=[{scope=Module, expecting=Item, marks=none}] state={phase=FnHead, marks=can_declare} evidence=token={kind=KwFn} frame={sequence=FnHead, offset=0, position=Begin, marks=none, construct=FunctionDeclaration, role=None, modifier=None}".to_owned(),
         }]
     );
     assert_eq!(ambiguous[0].code(), "BBBC0021");

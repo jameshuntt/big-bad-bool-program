@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use big_bad_bool::bitpack;
 use big_bad_bool_contract::{
-    Clause, ContainmentSpec, ContractSpec, FieldMatcher, FieldValue, ItemMatch, Observation,
-    OffsetFacts, Program, RecognizerSpec, RefusalRule, SequenceSpec, StackOp, Stepper,
+    Clause, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, ItemMatch,
+    Observation, OffsetFacts, Program, RecognizerSpec, RefusalRule, SequenceSpec, StackOp, Stepper,
     VerifiedProgram, VerifyLimits, Write, clause, contract, dimension, pop, push, sequence, set,
     verify,
 };
@@ -271,10 +271,8 @@ fn shadow(program: &VerifiedProgram, tokens: &[Token]) -> Option<String> {
     let mut stepper = Stepper::new(program, big_bad_bool_contract::NoObserver);
     let mut results = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
-        results.extend(stepper.push(Observation {
-            position: i as u32,
-            item: token_kind(t),
-        }));
+        results
+            .extend(stepper.push(Observation::new(i as u32).with(DimensionId(0), token_kind(t))));
     }
     results.extend(stepper.finish());
     if results.iter().any(|r| r.committed.is_none()) {

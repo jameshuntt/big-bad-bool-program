@@ -16,8 +16,8 @@ use crate::contract::{FactView, Outcome, evaluate};
 use crate::digest::{TRACE_FORMAT, TraceHeader, spec_digest};
 use crate::frame::Recognizer;
 use crate::model::{
-    ContractId, DimensionId, DimensionRole, DimensionSpec, ProgramSpec, ResolvedClause,
-    ResolvedItem, ResolvedStackOp, field_value,
+    ContractId, DimensionId, DimensionRole, DimensionSpec, Observation, ProgramSpec,
+    ResolvedClause, ResolvedItem, ResolvedStackOp, field_value,
 };
 use crate::step::ProjectionState;
 use crate::step::authorize::authorize;
@@ -28,7 +28,8 @@ use crate::step::commit::commit;
 pub struct VerifyLimits {
     /// Reachable states the search may visit before it reports `TooManyStates`.
     pub max_states: u128,
-    /// Candidate words per dimension the witness search may try.
+    /// Candidate words per dimension the witness search may try, and
+    /// evidence observations the state search may try.
     pub max_witness_tries: u32,
 }
 
@@ -53,37 +54,43 @@ impl VerificationReport {
 }
 
 /// Contracts bucketed by the first `Eq` WHEN clause on a plain (non-flag)
-/// item field. Contracts with no such clause are checked for every item.
+/// field of an observed evidence dimension. Contracts with no such clause are
+/// checked for every observation. A contract keyed on a dimension the
+/// observation does not hold cannot apply, so it is not looked up.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContractIndex {
-    keyed: Vec<(BitFieldSpec, BTreeMap<u128, Vec<ContractId>>)>,
+    keyed: Vec<(usize, BitFieldSpec, BTreeMap<u128, Vec<ContractId>>)>,
     unkeyed: Vec<ContractId>,
 }
 
 impl ContractIndex {
     fn new(spec: &ProgramSpec) -> Self {
-        let item_schema = spec.dims[spec.item_dim].schema();
         let mut index = Self::default();
         for (i, c) in spec.resolved.iter().enumerate() {
             let id = ContractId(i as u16);
             let key = c.when.iter().find_map(|cl| match cl.op {
                 MatchOp::Eq(v)
-                    if cl.dim == spec.item_dim && !item_schema.is_flag_field(cl.field.name) =>
+                    if spec.is_observed(DimensionId(cl.dim as u16))
+                        && !spec.dims[cl.dim].schema().is_flag_field(cl.field.name) =>
                 {
-                    Some((cl.field, v))
+                    Some((cl.dim, cl.field, v))
                 }
                 _ => None,
             });
             match key {
-                Some((field, value)) => {
-                    let slot = match index.keyed.iter().position(|(f, _)| f.name == field.name) {
+                Some((dim, field, value)) => {
+                    let slot = match index
+                        .keyed
+                        .iter()
+                        .position(|(d, f, _)| *d == dim && f.name == field.name)
+                    {
                         Some(slot) => slot,
                         None => {
-                            index.keyed.push((field, BTreeMap::new()));
+                            index.keyed.push((dim, field, BTreeMap::new()));
                             index.keyed.len() - 1
                         }
                     };
-                    index.keyed[slot].1.entry(value).or_default().push(id);
+                    index.keyed[slot].2.entry(value).or_default().push(id);
                 }
                 None => index.unkeyed.push(id),
             }
@@ -91,15 +98,19 @@ impl ContractIndex {
         index
     }
 
-    /// The contracts that can apply to `item`, in id order.
-    pub(crate) fn lookup(&self, item: u128) -> Vec<ContractId> {
+    /// The contracts that can apply to `observation`, in id order.
+    pub(crate) fn lookup(&self, observation: &Observation) -> Vec<ContractId> {
         let mut ids = self.unkeyed.clone();
-        for (field, buckets) in &self.keyed {
-            if let Some(found) = buckets.get(&field_value(field, item)) {
+        for (dim, field, buckets) in &self.keyed {
+            let Some(word) = observation.word(DimensionId(*dim as u16)) else {
+                continue;
+            };
+            if let Some(found) = buckets.get(&field_value(field, word)) {
                 ids.extend_from_slice(found);
             }
         }
         ids.sort_unstable();
+        ids.dedup();
         ids
     }
 }
@@ -111,7 +122,7 @@ pub struct VerifiedProgram {
     spec: ProgramSpec,
     recognizer: Recognizer,
     index: ContractIndex,
-    items: Vec<u128>,
+    inputs: Vec<Observation>,
     digest: StableDigest,
     report: VerificationReport,
 }
@@ -150,10 +161,12 @@ impl VerifiedProgram {
         &self.report
     }
 
-    /// Every labelled item word, the set `legal_next` and the state search draw from.
+    /// Every observation the state search tried and `legal_next` draws
+    /// from, at position 0: each observed evidence dimension absent or at
+    /// one of its labelled words.
     #[must_use]
-    pub fn item_words(&self) -> &[u128] {
-        &self.items
+    pub fn inputs(&self) -> &[Observation] {
+        &self.inputs
     }
 
     pub(crate) const fn index(&self) -> &ContractIndex {
@@ -193,6 +206,33 @@ fn labelled_words(dim: &DimensionSpec, cap: u128) -> Option<Vec<u128>> {
     }
     words.retain(|w| flaga_solver::check(schema, *w).is_ok_ignoring_deprecated());
     Some(words)
+}
+
+/// Every observation the search tries: each observed evidence dimension
+/// absent or at one of its labelled words, at position 0. `None` past `cap`.
+fn evidence_inputs(
+    spec: &ProgramSpec,
+    labelled: &[Vec<u128>],
+    cap: u128,
+) -> Option<Vec<Observation>> {
+    let mut out = vec![Observation::new(0)];
+    for d in spec.observed() {
+        let words = &labelled[d];
+        if (out.len() as u128).saturating_mul(words.len() as u128 + 1) > cap {
+            return None;
+        }
+        out = out
+            .iter()
+            .flat_map(|o| {
+                std::iter::once(o.clone()).chain(
+                    words
+                        .iter()
+                        .map(move |w| o.clone().with(DimensionId(d as u16), *w)),
+                )
+            })
+            .collect();
+    }
+    Some(out)
 }
 
 fn check_fixed(owner: &'static str, dim: &DimensionSpec, word: u128, found: &mut Vec<Finding>) {
@@ -267,30 +307,38 @@ pub fn verify(
             return Err(report);
         }
     };
-    let item_dim = &spec.dims[spec.item_dim];
-    let items = match labelled_words(item_dim, limits.max_states) {
-        Some(items) => items,
-        None => {
-            report.findings.push(Finding::TooManyStates {
-                explored: 0,
-                permitted: limits.max_states,
-            });
-            return Err(report);
-        }
+    let tries = u128::from(limits.max_witness_tries);
+    let too_many = |mut report: VerificationReport| {
+        report.findings.push(Finding::TooManyStates {
+            explored: tries + 1,
+            permitted: tries,
+        });
+        Err(report)
     };
+    let mut labelled = vec![Vec::new(); spec.dims.len()];
+    for d in spec.observed() {
+        match labelled_words(&spec.dims[d], tries) {
+            Some(words) => labelled[d] = words,
+            None => return too_many(report),
+        }
+    }
+    let Some(inputs) = evidence_inputs(&spec, &labelled, tries) else {
+        return too_many(report);
+    };
+    let items = labelled[spec.item_dim].clone();
     let index = ContractIndex::new(&spec);
     sequences(&spec, &items, &mut report.findings);
     let frames: Vec<u128> = std::iter::once(0)
         .chain(recognizer.universe().iter().map(|f| f.word))
         .collect();
     for c in 0..spec.resolved.len() {
-        satisfiable(&spec, c, &items, &frames, limits, &mut report.findings);
+        satisfiable(&spec, c, &labelled, &frames, limits, &mut report.findings);
     }
     report.states = search(
         &spec,
         &recognizer,
         &index,
-        &items,
+        &inputs,
         limits,
         &mut report.findings,
     );
@@ -302,7 +350,7 @@ pub fn verify(
         spec,
         recognizer,
         index,
-        items,
+        inputs,
         digest,
         report,
     })
@@ -431,13 +479,13 @@ fn state_witnesses(
 }
 
 /// Finds a contract none of whose REQUIRE-ANY choices has a witness word in
-/// every dimension it reads. Item words come from the labelled items, frame
-/// words from what the recognizer can produce, state words from the fields
-/// the clauses name.
+/// every dimension it reads. Observed evidence words come from each
+/// dimension's labelled words, frame words from what the recognizer can
+/// produce, state words from the fields the clauses name.
 fn satisfiable(
     spec: &ProgramSpec,
     contract: usize,
-    items: &[u128],
+    labelled: &[Vec<u128>],
     frames: &[u128],
     limits: VerifyLimits,
     found: &mut Vec<Finding>,
@@ -474,8 +522,8 @@ fn satisfiable(
                 pos.iter().all(|cl| cl.holds(dim.schema(), w))
                     && !neg.iter().any(|cl| cl.holds(dim.schema(), w))
             };
-            let witnessed = if d == spec.item_dim {
-                items.iter().any(|w| fits(*w))
+            let witnessed = if spec.is_observed(DimensionId(d as u16)) {
+                labelled[d].iter().any(|w| fits(*w))
             } else if d == spec.frame_dim {
                 frames.iter().any(|w| fits(*w))
             } else {
@@ -527,11 +575,28 @@ fn satisfiable(
     }
 }
 
-/// One input of the state search: an item word and the frame word it is seen under.
+/// One input of the state search: an observation and the frame word it is seen under.
 struct Input {
-    item: u128,
+    observation: Observation,
     frame: u128,
     sequence: Option<(usize, usize)>,
+}
+
+/// The evidence an observation holds, as `dimension={fields}` pairs.
+fn render_evidence(spec: &ProgramSpec, observation: &Observation) -> String {
+    let parts: Vec<String> = observation
+        .evidence()
+        .iter()
+        .map(|(d, w)| {
+            let dim = &spec.dims[usize::from(d.0)];
+            format!("{}={}", dim.name(), dim.describe(*w))
+        })
+        .collect();
+    if parts.is_empty() {
+        "nothing".to_owned()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
@@ -552,31 +617,34 @@ fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
 }
 
 /// Breadth-first search over committed states from the start state. Every
-/// input is a labelled item seen with no frame, or seen under a frame word
-/// whose focal offset accepts it. The successor of a state is what commit
-/// gives; the end item's successors are not followed. Returns the number of
-/// states visited.
+/// input is an evidence observation seen with no frame, or, when it holds an
+/// item word, seen under a frame word whose focal offset accepts it. The
+/// successor of a state is what commit gives; the end item's successors are
+/// not followed. Returns the number of states visited.
 fn search(
     spec: &ProgramSpec,
     recognizer: &Recognizer,
     index: &ContractIndex,
-    items: &[u128],
+    observations: &[Observation],
     limits: VerifyLimits,
     found: &mut Vec<Finding>,
 ) -> usize {
-    let mut inputs: Vec<Input> = items
+    let item_dim = DimensionId(spec.item_dim as u16);
+    let mut inputs: Vec<Input> = observations
         .iter()
-        .map(|&item| Input {
-            item,
+        .map(|o| Input {
+            observation: o.clone(),
             frame: 0,
             sequence: None,
         })
         .collect();
     for f in recognizer.universe() {
-        for &item in items {
-            if recognizer.accepts(&f, item) {
+        for o in observations {
+            if o.word(item_dim)
+                .is_some_and(|item| recognizer.accepts(&f, item))
+            {
                 inputs.push(Input {
-                    item,
+                    observation: o.clone(),
                     frame: f.word,
                     sequence: Some((usize::from(f.sequence.0), usize::from(f.offset))),
                 });
@@ -597,13 +665,12 @@ fn search(
     let mut ambiguous: Vec<(ContractId, ContractId)> = Vec::new();
     let mut no_exit: Option<String> = None;
     let mut complete = true;
-    let item_describe = &spec.dims[spec.item_dim];
     let frame_describe = &spec.dims[spec.frame_dim];
 
     while let Some(state) = queue.pop_front() {
         let mut exit = false;
         for input in &inputs {
-            let words = state.fact_words(spec, input.item, input.frame);
+            let words = state.fact_words(spec, &input.observation, input.frame);
             let view = FactView::new(
                 spec,
                 &words,
@@ -613,7 +680,7 @@ fn search(
                     .map(|(s, _)| crate::model::SequenceId(s as u16)),
             );
             let candidates: Vec<_> = index
-                .lookup(input.item)
+                .lookup(&input.observation)
                 .into_iter()
                 .filter_map(|id| match evaluate(id, &view) {
                     Outcome::Candidate(c) => Some(c),
@@ -632,9 +699,9 @@ fn search(
                             first,
                             second,
                             witness: format!(
-                                "{} item={} frame={}",
+                                "{} evidence={} frame={}",
                                 render_state(spec, &state),
-                                item_describe.describe(input.item),
+                                render_evidence(spec, &input.observation),
                                 if input.sequence.is_some() {
                                     frame_describe.describe(input.frame)
                                 } else {
@@ -654,7 +721,8 @@ fn search(
                         if let Some((s, o)) = input.sequence {
                             used[s][o] = true;
                         }
-                        if input.item != spec.end_word && seen.insert(next.clone()) {
+                        let end = input.observation.word(item_dim) == Some(spec.end_word);
+                        if !end && seen.insert(next.clone()) {
                             if seen.len() as u128 > limits.max_states {
                                 complete = false;
                                 break;

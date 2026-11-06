@@ -441,13 +441,66 @@ impl Position {
     }
 }
 
-/// One input item at one position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One input position and the evidence words observed there.
+///
+/// An observation holds at most one word per evidence dimension, in
+/// dimension order. A dimension it does not hold reads as nothing: no clause
+/// on it holds, as with an empty stack. With a recognizer, the item word is
+/// the item dimension's word, and the frame dimension is written by the
+/// recognizer, never observed. The stepper checks every word with
+/// flaga_solver before it is used.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Observation {
+    position: u32,
+    evidence: Vec<(DimensionId, u128)>,
+}
+
+impl Observation {
+    /// An observation at `position` holding no evidence yet.
+    #[must_use]
+    pub const fn new(position: u32) -> Self {
+        Self {
+            position,
+            evidence: Vec::new(),
+        }
+    }
+
+    /// Sets `dimension`'s raw word. A second word for one dimension replaces the first.
+    #[must_use]
+    pub fn with(mut self, dimension: DimensionId, word: u128) -> Self {
+        match self.evidence.binary_search_by_key(&dimension, |(d, _)| *d) {
+            Ok(i) => self.evidence[i].1 = word,
+            Err(i) => self.evidence.insert(i, (dimension, word)),
+        }
+        self
+    }
+
+    /// Sets `dimension`'s word from a packed value of its `#[bitpack]` type.
+    #[must_use]
+    pub fn with_word<T: PackedWord>(self, dimension: DimensionId, word: T) -> Self {
+        self.with(dimension, word.raw_u128())
+    }
+
     /// The input position. The application maps it back to its own text.
-    pub position: u32,
-    /// The item dimension's raw word.
-    pub item: u128,
+    #[must_use]
+    pub const fn position(&self) -> u32 {
+        self.position
+    }
+
+    /// `dimension`'s word, when the observation holds one.
+    #[must_use]
+    pub fn word(&self, dimension: DimensionId) -> Option<u128> {
+        self.evidence
+            .binary_search_by_key(&dimension, |(d, _)| *d)
+            .ok()
+            .map(|i| self.evidence[i].1)
+    }
+
+    /// Every word held, in dimension order.
+    #[must_use]
+    pub fn evidence(&self) -> &[(DimensionId, u128)] {
+        &self.evidence
+    }
 }
 
 /// The value of `field` inside `word`.
@@ -692,6 +745,21 @@ impl ProgramSpec {
     #[must_use]
     pub const fn frame_dimension(&self) -> DimensionId {
         DimensionId(self.frame_dim as u16)
+    }
+
+    /// True for an evidence dimension an observation may hold: every
+    /// evidence dimension except the one the recognizer writes.
+    #[must_use]
+    pub fn is_observed(&self, dimension: DimensionId) -> bool {
+        let i = usize::from(dimension.0);
+        self.dims
+            .get(i)
+            .is_some_and(|d| d.role == DimensionRole::Evidence && i != self.frame_dim)
+    }
+
+    /// The dimensions an observation may hold, in order.
+    pub(crate) fn observed(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.dims.len()).filter(|i| self.is_observed(DimensionId(*i as u16)))
     }
 }
 

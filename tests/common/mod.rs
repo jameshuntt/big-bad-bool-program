@@ -554,15 +554,15 @@ pub fn program() -> ProgramBuilder {
     program_with(CONTAINMENT)
 }
 
+/// The token dimension: the first one added, and the recognizer's item dimension.
+pub const TOKEN: big_bad_bool_contract::DimensionId = big_bad_bool_contract::DimensionId(0);
+
 /// One observation per token kind, positions from `first`.
 pub fn tokens(first: u32, kinds: &[u128]) -> Vec<Observation> {
     kinds
         .iter()
         .zip(first..)
-        .map(|(k, position)| Observation {
-            position,
-            item: u128::from(TokenWord::new(*k as u8).raw()),
-        })
+        .map(|(k, position)| Observation::new(position).with_word(TOKEN, TokenWord::new(*k as u8)))
         .collect()
 }
 
@@ -635,9 +635,15 @@ fn state_changes(spec: &ProgramSpec, before: &ProjectionState, after: &Projectio
 
 /// One line per event.
 pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
-    let token = spec.dimension(spec.item_dimension()).unwrap();
     match event {
-        StepEvent::Observed(o) => format!("observed {} {}", o.position, token.describe(o.item)),
+        StepEvent::Observed(o) => {
+            let words: Vec<String> = o
+                .evidence()
+                .iter()
+                .map(|(d, w)| spec.dimension(*d).unwrap().describe(*w))
+                .collect();
+            format!("observed {} {}", o.position(), words.join(" "))
+        }
         StepEvent::Framed(frames) => format!("framed {}", frames_text(spec, frames)),
         StepEvent::Candidate(c) => format!(
             "candidate {} via {}",

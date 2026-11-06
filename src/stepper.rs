@@ -3,18 +3,23 @@
 //! The focal item at index `i` is stepped once item `i + R` has arrived (R is
 //! the window radius). `finish` pads with the end item, steps every remaining
 //! item, then steps the end item itself at the position after the last
-//! observation. Per position: frame, evaluate every contract under every
-//! interpretation, authorize, commit. Observers see each stage.
+//! observation. Per position: admit the observation's evidence, frame,
+//! evaluate every contract under every interpretation, authorize, commit.
+//! Observers see each stage.
+//!
+//! Admission happens on `push`. An observation holding a word for a
+//! dimension that is not observed evidence, or a word its schema refuses, is
+//! refused at its own step and holds no evidence for its neighbours' windows.
 
 use std::collections::VecDeque;
 
 use crate::codes::Refusal;
 use crate::contract::{FactView, Outcome, evaluate};
 use crate::frame::FrameFacts;
-use crate::model::{ContractId, Observation, RefusalRule};
+use crate::model::{ContractId, DimensionRole, Observation, ProgramSpec, RefusalRule};
 use crate::observe::{Observer, StepEvent};
 use crate::step::authorize::authorize;
-use crate::step::commit::commit;
+use crate::step::commit::{check, commit};
 use crate::step::limits::{Limit, within};
 use crate::step::{Effect, ProjectionState};
 use crate::verify::VerifiedProgram;
@@ -38,7 +43,7 @@ pub struct StepResult {
 pub struct Stepper<'p, O: Observer> {
     program: &'p VerifiedProgram,
     state: ProjectionState,
-    buffer: VecDeque<Observation>,
+    buffer: VecDeque<(Observation, Option<Refusal>)>,
     base: usize,
     received: usize,
     next: usize,
@@ -71,8 +76,9 @@ impl<'p, O: Observer> Stepper<'p, O> {
         if self.halted || self.finished {
             return Vec::new();
         }
-        self.end_position = observation.position.saturating_add(1);
-        self.buffer.push_back(observation);
+        self.end_position = observation.position().saturating_add(1);
+        let refusal = admit(self.program.spec(), &observation).err();
+        self.buffer.push_back((observation, refusal));
         self.received += 1;
         let radius = self.program.spec().window_radius();
         let mut results = Vec::new();
@@ -118,35 +124,36 @@ impl<'p, O: Observer> Stepper<'p, O> {
         self.halted
     }
 
-    /// The item words some contract would accept and containment would
+    /// The observations some contract would accept and containment would
     /// authorize at the next focal position, from the current state, over
-    /// every frame interpretation the recognizer can produce for that item.
+    /// every frame interpretation the recognizer can produce for the item.
+    /// Each is one of [`VerifiedProgram::inputs`], at the next position.
     /// Read only: prediction may rank this set, never add to it.
     #[must_use]
-    pub fn legal_next(&self) -> Vec<u128> {
+    pub fn legal_next(&self) -> Vec<Observation> {
         let program = self.program;
         let spec = program.spec();
         let frames = program.recognizer().universe();
         let next = u32::try_from(self.next).unwrap_or(u32::MAX);
         program
-            .item_words()
+            .inputs()
             .iter()
-            .copied()
-            .filter(|&item| {
+            .filter(|input| {
+                let item = input.word(spec.item_dimension());
                 let mut views = std::iter::once(None).chain(
                     frames
                         .iter()
-                        .filter(|f| program.recognizer().accepts(f, item))
+                        .filter(|f| item.is_some_and(|w| program.recognizer().accepts(f, w)))
                         .map(Some),
                 );
                 views.any(|frame: Option<&FrameFacts>| {
                     let words = self
                         .state
-                        .fact_words(spec, item, frame.map_or(0, |f| f.word));
+                        .fact_words(spec, input, frame.map_or(0, |f| f.word));
                     let view = FactView::new(spec, &words, next, frame.map(|f| f.sequence));
                     let candidates: Vec<_> = program
                         .index()
-                        .lookup(item)
+                        .lookup(input)
                         .into_iter()
                         .filter_map(|id| match evaluate(id, &view) {
                             Outcome::Candidate(c) => Some(c),
@@ -156,6 +163,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
                     authorize(spec, &self.state, &candidates, next, 0).is_ok()
                 })
             })
+            .map(|input| at(next, input))
             .collect()
     }
 
@@ -163,7 +171,12 @@ impl<'p, O: Observer> Stepper<'p, O> {
         if index < self.base {
             None
         } else if index < self.received {
-            self.buffer.get(index - self.base).map(|o| o.item)
+            let (observation, refusal) = self.buffer.get(index - self.base)?;
+            if refusal.is_some() {
+                None
+            } else {
+                observation.word(self.program.spec().item_dimension())
+            }
         } else if finishing {
             Some(self.program.spec().end_word())
         } else {
@@ -175,15 +188,14 @@ impl<'p, O: Observer> Stepper<'p, O> {
         let program = self.program;
         let spec = program.spec();
         let index = self.next;
-        let observation = if index < self.received {
-            self.buffer[index - self.base]
+        let (observation, admission) = if index < self.received {
+            self.buffer[index - self.base].clone()
         } else {
-            Observation {
-                position: self.end_position,
-                item: spec.end_word(),
-            }
+            let end =
+                Observation::new(self.end_position).with(spec.item_dimension(), spec.end_word());
+            (end, None)
         };
-        let position = observation.position;
+        let position = observation.position();
         self.observer.observe(&StepEvent::Observed(&observation));
 
         let frames = program
@@ -191,14 +203,18 @@ impl<'p, O: Observer> Stepper<'p, O> {
             .recognize_with(index, |i| self.item_at(i, finishing));
         self.observer.observe(&StepEvent::Framed(&frames));
 
-        let result = match within(
-            Limit::Interpretations,
-            frames.len(),
-            spec.containment().max_interpretations,
-            position,
-        ) {
-            Err(refusal) => self.refuse(position, vec![refusal]),
-            Ok(()) => self.decide(&observation, &frames),
+        let result = if let Some(refusal) = admission {
+            self.refuse(position, vec![refusal])
+        } else {
+            match within(
+                Limit::Interpretations,
+                frames.len(),
+                spec.containment().max_interpretations,
+                position,
+            ) {
+                Err(refusal) => self.refuse(position, vec![refusal]),
+                Ok(()) => self.decide(&observation, &frames),
+            }
         };
 
         self.next += 1;
@@ -213,19 +229,19 @@ impl<'p, O: Observer> Stepper<'p, O> {
     fn decide(&mut self, observation: &Observation, frames: &[FrameFacts]) -> StepResult {
         let program = self.program;
         let spec = program.spec();
-        let position = observation.position;
+        let position = observation.position();
         let views: Vec<Option<&FrameFacts>> = if frames.is_empty() {
             vec![None]
         } else {
             frames.iter().map(Some).collect()
         };
-        let ids = program.index().lookup(observation.item);
+        let ids = program.index().lookup(observation);
         let mut candidates = Vec::new();
         let mut refused: Vec<(ContractId, Refusal)> = Vec::new();
         for frame in views {
             let words = self
                 .state
-                .fact_words(spec, observation.item, frame.map_or(0, |f| f.word));
+                .fact_words(spec, observation, frame.map_or(0, |f| f.word));
             let view = FactView::new(spec, &words, position, frame.map(|f| f.sequence));
             for &id in &ids {
                 match evaluate(id, &view) {
@@ -294,4 +310,40 @@ impl<'p, O: Observer> Stepper<'p, O> {
             refusals,
         }
     }
+}
+
+/// `input`'s evidence at `position`.
+fn at(position: u32, input: &Observation) -> Observation {
+    input
+        .evidence()
+        .iter()
+        .fold(Observation::new(position), |o, (d, w)| o.with(*d, *w))
+}
+
+/// Checks every word an observation holds: the dimension exists, is
+/// evidence, is not written by the recognizer, and flaga_solver accepts the word.
+fn admit(spec: &ProgramSpec, observation: &Observation) -> Result<(), Refusal> {
+    let position = observation.position();
+    for &(id, word) in observation.evidence() {
+        let Some(dim) = spec.dimension(id) else {
+            return Err(Refusal::Evidence {
+                position,
+                dimension: format!("#{}", id.0),
+                rule: "no such dimension",
+            });
+        };
+        let refuse = |rule| Refusal::Evidence {
+            position,
+            dimension: dim.name().to_owned(),
+            rule,
+        };
+        if dim.role() != DimensionRole::Evidence {
+            return Err(refuse("only evidence dimensions are observed"));
+        }
+        if !spec.is_observed(id) {
+            return Err(refuse("the recognizer writes this dimension"));
+        }
+        check(position, dim, word)?;
+    }
+    Ok(())
 }

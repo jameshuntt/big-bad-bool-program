@@ -13,7 +13,10 @@ fn spec() -> ProgramSpec {
 }
 
 fn items(kinds: &[u128]) -> Vec<u128> {
-    common::tokens(0, kinds).iter().map(|o| o.item).collect()
+    common::tokens(0, kinds)
+        .iter()
+        .map(|o| o.word(common::TOKEN).unwrap())
+        .collect()
 }
 
 /// (sequence name, offset) pairs, in recognizer order.

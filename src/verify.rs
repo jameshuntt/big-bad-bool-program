@@ -14,6 +14,12 @@
 //! combination of classes a legal word can have, beside every labelled
 //! word. So any legal runtime word gives the same matcher answers as some
 //! domain word, labelled or not.
+//!
+//! Whether a contract's clauses on a state dimension can hold is decided over
+//! the same classes, split by those clauses and the dimension's legality
+//! rules: some legal state word meets the positive clauses and no FORBID
+//! clause exactly when one word per class combination does. Past
+//! `max_witness_tries` words the answer is `TooManyStates`.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
@@ -450,79 +456,13 @@ fn sequences(spec: &ProgramSpec, item_dim: usize, items: &[u128], found: &mut Ve
     }
 }
 
-/// Values worth trying in one field: zero, the max, the default, every label,
-/// all labels together, and each clause constant with its neighbours.
-fn field_candidates(dim: &DimensionSpec, clauses: &[&ResolvedClause]) -> Vec<u128> {
-    let field = &clauses[0].field;
-    let max = field.max_value();
-    let schema = dim.schema();
-    let mut values = vec![0, max, field.default.unwrap_or(0)];
-    let labels: Vec<u128> = schema
-        .labels
-        .iter()
-        .filter(|l| l.field == field.name)
-        .map(|l| l.value)
-        .collect();
-    values.push(labels.iter().fold(0, |acc, v| acc | v));
-    values.extend(labels);
-    for c in clauses {
-        match c.op {
-            MatchOp::Any => {}
-            MatchOp::Eq(v) | MatchOp::NotEq(v) => {
-                values.extend([v, v.saturating_add(1), v.saturating_sub(1)])
-            }
-            MatchOp::RangeInclusive { min, max } => {
-                values.extend([min, max, min.saturating_sub(1), max.saturating_add(1)]);
-            }
-            MatchOp::MaskAll { mask } | MatchOp::MaskAny { mask } => values.push(mask),
-        }
-    }
-    values.retain(|v| *v <= max);
-    values.sort_unstable();
-    values.dedup();
-    values
-}
-
-/// Words of a state dimension worth trying: every combination of candidate
-/// values over the fields the clauses name, other fields at default, legal
-/// under flaga_solver. `None` past `cap`.
-fn state_witnesses(
-    dim: &DimensionSpec,
-    clauses: &[&ResolvedClause],
-    cap: u32,
-) -> Option<Vec<u128>> {
-    let mut words = vec![dim.default_word()];
-    let mut fields: Vec<&str> = clauses.iter().map(|c| c.field.name).collect();
-    fields.sort_unstable();
-    fields.dedup();
-    for name in fields {
-        let on_field: Vec<&ResolvedClause> = clauses
-            .iter()
-            .copied()
-            .filter(|c| c.field.name == name)
-            .collect();
-        let spec = on_field[0].field;
-        let values = field_candidates(dim, &on_field);
-        if (words.len() as u128).saturating_mul(values.len() as u128) > u128::from(cap) {
-            return None;
-        }
-        words = words
-            .iter()
-            .flat_map(|w| {
-                values
-                    .iter()
-                    .map(move |v| (w & !spec.mask) | (v << spec.shift))
-            })
-            .collect();
-    }
-    words.retain(|w| flaga_solver::check(dim.schema(), *w).is_ok_ignoring_deprecated());
-    Some(words)
-}
-
 /// Finds a contract none of whose REQUIRE-ANY choices has a witness word in
 /// every dimension it reads. Observed evidence words come from each
 /// dimension's evidence domain, frame words from what the recognizer can
-/// produce, state words from the fields the clauses name.
+/// produce. A state word is looked for over the matcher classes of the
+/// contract's clauses on that dimension and its legality rules
+/// (`domain::witness`); past `max_witness_tries` words that is
+/// `TooManyStates`, never a verdict from part of the domain.
 fn satisfiable(
     spec: &ProgramSpec,
     contract: usize,
@@ -532,6 +472,7 @@ fn satisfiable(
     found: &mut Vec<Finding>,
 ) {
     let c = &spec.resolved[contract];
+    let tries = u128::from(limits.max_witness_tries);
     let empty = Vec::new();
     let groups: Vec<&Vec<ResolvedClause>> = if c.require_any.is_empty() {
         vec![&empty]
@@ -568,9 +509,8 @@ fn satisfiable(
             } else if Some(d) == spec.frame_dim() {
                 frames.iter().any(|w| fits(*w))
             } else {
-                let named: Vec<&ResolvedClause> = pos.iter().chain(neg.iter()).copied().collect();
-                match state_witnesses(dim, &named, limits.max_witness_tries) {
-                    Some(words) => words.iter().any(|w| fits(*w)),
+                match domain::witness(dim, &pos, &neg, tries) {
+                    Some(found) => found.is_some(),
                     None => {
                         found.push(Finding::TooManyStates {
                             explored: u128::from(limits.max_witness_tries) + 1,
@@ -581,19 +521,17 @@ fn satisfiable(
                 }
             };
             if !witnessed {
+                // A field whose positive clauses alone no legal word meets.
                 let field = pos
                     .iter()
                     .map(|cl| cl.field.name)
                     .find(|name| {
-                        let only: Vec<&&ResolvedClause> =
-                            pos.iter().filter(|cl| cl.field.name == *name).collect();
-                        let values =
-                            field_candidates(dim, &only.iter().map(|c| **c).collect::<Vec<_>>());
-                        !values.iter().any(|v| {
-                            let w = (dim.default_word() & !only[0].field.mask)
-                                | (v << only[0].field.shift);
-                            only.iter().all(|cl| cl.holds(dim.schema(), w))
-                        })
+                        let only: Vec<&ResolvedClause> = pos
+                            .iter()
+                            .copied()
+                            .filter(|cl| cl.field.name == *name)
+                            .collect();
+                        domain::witness(dim, &only, &[], tries) == Some(None)
                     })
                     .unwrap_or("(joint)");
                 failure = Some((d, field));

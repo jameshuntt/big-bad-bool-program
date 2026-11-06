@@ -181,6 +181,47 @@ yet pushing `Close` mid-stream committed `close` and moved the phase to
   `verifier_and_runtime_agree_on_the_end_word`. Against the previous commit
   the first, second and fourth fail: the pushed end word committed `close`.
 
+### 7. State satisfiability uses the matcher classes
+
+Why: `satisfiable` looked for a state witness among guessed values (zero,
+the maximum, the default, the labels, all labels together, each clause
+constant and its neighbours) in the fields the clauses name, every other
+field at its default. A satisfiable contract could be reported
+`Unsatisfiable`: level 4..=11, even, not 4 or 8 (only 6 and 10, unlabelled);
+bits 1 and 2 set with bits 0 and 3 clear (only 6); and `mode = High` where
+`High` requires a flag in another field. On the four readers in
+`tests/correction7_state_domain.rs` the old check reported
+`Unsatisfiable { dimension: "gauge", field: "(joint)" }` for each, and the
+stepper committed every one of them.
+
+- `satisfiable` asks `domain::witness` for a state dimension: the domain of
+  `src/verify/domain.rs`, built from the contract's positive and FORBID
+  clauses on that dimension and its invalid, reserved, requires and conflicts
+  rules, every field included, one legal word per class combination and no
+  labels added. Some legal word meets the positive clauses and no FORBID
+  clause exactly when one of these does.
+- The field an `Unsatisfiable` finding names is the first field whose
+  positive clauses alone no legal word meets, over the same domain;
+  otherwise `(joint)`.
+- Bounded by `max_witness_tries` as before; past it the finding is
+  `TooManyStates`, never a verdict from part of the domain.
+- Removed: `field_candidates` and `state_witnesses`.
+- Behaviour change: such contracts verify. Every golden, the digest,
+  section 16 (70 states), core-1o and klepto are unchanged.
+- Proof: `tests/correction7_state_domain.rs`:
+  `a_state_range_whose_witness_is_unlabelled_is_satisfiable`,
+  `a_state_mask_witness_is_found`,
+  `positive_clauses_with_forbid_on_the_same_field_keep_their_witness`,
+  `a_legality_rule_on_an_unnamed_field_does_not_hide_the_witness`,
+  `intersections_across_several_state_fields_are_found`,
+  `contradictory_state_clauses_are_still_unsatisfiable`,
+  `a_state_domain_past_the_bound_is_too_many_states_not_unsatisfiable`
+  (all but the contradictions fail against the previous commit), and the unit
+  tests `tiny_state_witness_agrees_with_brute_force` and
+  `wide_state_witness_agrees_with_brute_force` in `src/verify/domain.rs`,
+  which compare the witness with brute force over every legal word for 4,000
+  random positive and FORBID clause sets.
+
 ## 0.1.0 (unreleased, not published)
 
 First build of the approved architecture report (sections 9 to 24), steps 1 to 11

@@ -181,6 +181,12 @@ Rules worth knowing:
   labelled word. A legal word with no label therefore gives the same matcher
   answers as some domain word, and a verified program never refuses with
   `Conflict` at run time.
+- `Unsatisfiable` on a state dimension is decided over the same classes, split
+  by the contract's clauses on that dimension (positive and FORBID) and the
+  dimension's legality rules, every field included. Some legal state word
+  meets the positive clauses and no FORBID clause exactly when one word per
+  class combination does, so a satisfiable contract is never reported
+  `Unsatisfiable`. Past `max_witness_tries` words it is `TooManyStates`.
 
 ## Tests
 
@@ -201,7 +207,8 @@ BLESS_GOLDEN=1 cargo test       # rewrites tests/golden/*; review the diff befor
 | `tests/correction4_overlap.rs` | Contained and overlapping matches coexist; left and right context still decide; contradictory facts are listed and, when relied on together, refused; the section 16 examples still work |
 | `tests/correction6_end_word.rs` | A pushed end word is refused, writes no state and opens no path, on skip and on stop; `finish` still steps the end item; the verifier's end-item treatment and the stepper agree |
 | `tests/correction5_evidence_domain.rs` | Conflicts that only unlabelled values show (overlapping ranges, masks, intersections of several contracts, two evidence dimensions together) are found; labelled words keep their behaviour; over every legal observation the domain gives every contract outcome, and the stepper shows no conflict the verifier did not report |
-| `src/verify/domain.rs` (unit) | On two tiny schemas, for 1,900 random clause sets, the domain gives exactly the matcher answers brute force over every legal word gives |
+| `tests/correction7_state_domain.rs` | State contracts whose only witnesses are unlabelled (ranges, masks, FORBID on the same field, a `requires` rule on a field the clauses do not name, several fields at once) verify and commit at run time; contradictions are still `Unsatisfiable`; past the bound it is `TooManyStates` |
+| `src/verify/domain.rs` (unit) | On two tiny schemas, for 1,900 random clause sets, the domain gives exactly the matcher answers brute force over every legal word gives; for 4,000 random positive and FORBID sets, the state witness exists exactly when brute force finds one |
 | `src/step/authorize.rs` (unit) | Merging, conflicts on fields, stacks, effects and frame facts, fan-out and candidate limits |
 | `tests/step01_model.rs` | Dimensions resolve by name; bad clauses give interact's `validate_rule_table` findings one for one; role rules |
 | `tests/step02_contract.rs` | WHEN, REQUIRE, REQUIRE-ANY, FORBID; flag-field labels through `Schema::holds` |

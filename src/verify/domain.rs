@@ -21,6 +21,14 @@
 //! The classes are found without listing a field's values: each predicate
 //! splits a region of values into the part where it holds and the part where
 //! it does not, and a region is kept only when some value lies in it.
+//!
+//! The same classes answer whether a contract's state clauses can hold
+//! (`witness`). There the predicates are the contract's positive and
+//! FORBID clauses on the dimension and the legality rules, and no label is
+//! added: one legal word for every class combination a legal word can have
+//! is enough to decide whether some legal word meets the positive clauses and
+//! none of the FORBID clauses. Past the bound there is no answer, never a
+//! smaller domain.
 
 use std::collections::BTreeMap;
 
@@ -318,23 +326,29 @@ pub(crate) fn classes(preds: &[Pred], max: u128, cap: u128) -> Option<BTreeMap<V
     Some(out)
 }
 
-/// The values `field` takes in the domain: its labelled values (its default
-/// when it has none), and one more value for each class no such value is in.
+/// The values `field` takes in the domain: with `labelled`, its labelled
+/// values (its default when it has none); then one more value for each class
+/// no such value is in. Without `labelled`, one value per class.
 pub(crate) fn field_domain(
     dim: &DimensionSpec,
     field: &BitFieldSpec,
     preds: &[Pred],
+    labelled: bool,
     cap: u128,
 ) -> Option<Vec<u128>> {
     let schema = dim.schema();
-    let mut values: Vec<u128> = schema
-        .labels
-        .iter()
-        .filter(|l| l.field == field.name)
-        .map(|l| l.value)
-        .collect();
-    if values.is_empty() {
-        values.push(field_value(field, dim.default_word()));
+    let mut values: Vec<u128> = Vec::new();
+    if labelled {
+        values.extend(
+            schema
+                .labels
+                .iter()
+                .filter(|l| l.field == field.name)
+                .map(|l| l.value),
+        );
+        if values.is_empty() {
+            values.push(field_value(field, dim.default_word()));
+        }
     }
     let answers = |v: u128| -> Vec<bool> { preds.iter().map(|p| p.holds(v)).collect() };
     let covered: Vec<Vec<bool>> = values.iter().map(|v| answers(*v)).collect();
@@ -374,18 +388,20 @@ pub(crate) fn clauses_on(spec: &ProgramSpec, d: usize) -> Vec<ResolvedClause> {
 }
 
 /// The domain of one dimension: every combination of each field's domain
-/// values, kept when flaga_solver accepts it. `None` past `cap` words.
+/// values (with or without its labelled values), kept when flaga_solver
+/// accepts it. `None` past `cap` words.
 pub(crate) fn dimension_words(
     dim: &DimensionSpec,
     clauses: &[ResolvedClause],
     end: Option<u128>,
+    labelled: bool,
     cap: u128,
 ) -> Option<Vec<u128>> {
     let schema = dim.schema();
     let mut words = vec![dim.default_word()];
     for field in schema.fields {
         let preds = field_preds(dim, field, clauses, end);
-        let values = field_domain(dim, field, &preds, cap)?;
+        let values = field_domain(dim, field, &preds, labelled, cap)?;
         if (words.len() as u128).saturating_mul(values.len() as u128) > cap {
             return None;
         }
@@ -405,7 +421,26 @@ pub(crate) fn dimension_words(
 /// The domain of observed evidence dimension `d` of `spec`.
 pub(crate) fn evidence_words(spec: &ProgramSpec, d: usize, cap: u128) -> Option<Vec<u128>> {
     let end = spec.end_word().filter(|_| spec.item_dim() == Some(d));
-    dimension_words(&spec.dims[d], &clauses_on(spec, d), end, cap)
+    dimension_words(&spec.dims[d], &clauses_on(spec, d), end, true, cap)
+}
+
+/// A legal word of `dim` on which every clause of `pos` holds and no clause
+/// of `neg` does: `Some(None)` when there is none, `None` when the domain
+/// passes `cap` words. The domain is one legal word for every combination
+/// of classes a legal word can have under these clauses and the legality
+/// rules, so it holds such a word exactly when some legal word is one.
+pub(crate) fn witness(
+    dim: &DimensionSpec,
+    pos: &[&ResolvedClause],
+    neg: &[&ResolvedClause],
+    cap: u128,
+) -> Option<Option<u128>> {
+    let schema = dim.schema();
+    let clauses: Vec<ResolvedClause> = pos.iter().chain(neg).map(|c| **c).collect();
+    let words = dimension_words(dim, &clauses, None, false, cap)?;
+    Some(words.into_iter().find(|w| {
+        pos.iter().all(|c| c.holds(schema, *w)) && !neg.iter().any(|c| c.holds(schema, *w))
+    }))
 }
 
 #[cfg(test)]
@@ -573,7 +608,7 @@ mod tests {
             .filter(|w| legal(dim, *w))
             .map(|w| answers(dim, clauses, end, w))
             .collect();
-        let domain = dimension_words(dim, clauses, end, 1 << 20).expect("within the cap");
+        let domain = dimension_words(dim, clauses, end, true, 1 << 20).expect("within the cap");
         assert!(
             domain.iter().all(|w| legal(dim, *w)),
             "seed {seed}: an illegal domain word"
@@ -616,13 +651,67 @@ mod tests {
         sweep(&crate::dimension!(Wide, "wide", Evidence), 400);
     }
 
+    /// Over every legal word of `dim`: some word meets `pos` and none of `neg`.
+    fn brute_witness(
+        dim: &DimensionSpec,
+        pos: &[&ResolvedClause],
+        neg: &[&ResolvedClause],
+    ) -> bool {
+        every_word(dim).filter(|w| legal(dim, *w)).any(|w| {
+            pos.iter().all(|c| c.holds(dim.schema(), w))
+                && !neg.iter().any(|c| c.holds(dim.schema(), w))
+        })
+    }
+
+    /// `witness`, as `satisfiable` asks it for a state dimension, against
+    /// brute force over every legal word, for random positive and FORBID
+    /// clause sets. A found word is legal and meets the clauses.
+    fn witness_sweep(dim: &DimensionSpec, runs: u64) {
+        let mut found = 0;
+        for seed in 1..=runs {
+            let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
+            let pos: Vec<ResolvedClause> = (0..1 + rng.below(4))
+                .map(|_| random_clause(dim, &mut rng))
+                .collect();
+            let neg: Vec<ResolvedClause> = (0..rng.below(4))
+                .map(|_| random_clause(dim, &mut rng))
+                .collect();
+            let pos: Vec<&ResolvedClause> = pos.iter().collect();
+            let neg: Vec<&ResolvedClause> = neg.iter().collect();
+            let got = witness(dim, &pos, &neg, 1 << 20).expect("within the cap");
+            assert_eq!(
+                got.is_some(),
+                brute_witness(dim, &pos, &neg),
+                "seed {seed}: pos {pos:?}, neg {neg:?}, got {got:?}"
+            );
+            if let Some(w) = got {
+                found += 1;
+                assert!(legal(dim, w), "seed {seed}: illegal witness {w}");
+                assert!(pos.iter().all(|c| c.holds(dim.schema(), w)));
+                assert!(!neg.iter().any(|c| c.holds(dim.schema(), w)));
+            }
+        }
+        // Both answers occur, so the sweep tests both directions.
+        assert!(found > 0 && found < runs, "{found} of {runs}");
+    }
+
+    #[test]
+    fn tiny_state_witness_agrees_with_brute_force() {
+        witness_sweep(&crate::dimension!(Tiny, "tiny", State), 3_000);
+    }
+
+    #[test]
+    fn wide_state_witness_agrees_with_brute_force() {
+        witness_sweep(&crate::dimension!(Wide, "wide", State), 1_000);
+    }
+
     #[test]
     fn no_clauses_leave_the_labelled_domain_as_it_was() {
         for dim in [
             crate::dimension!(Tiny, "tiny", Evidence),
             crate::dimension!(Wide, "wide", Evidence),
         ] {
-            let domain = dimension_words(&dim, &[], None, 1 << 20).unwrap();
+            let domain = dimension_words(&dim, &[], None, true, 1 << 20).unwrap();
             let mut labelled = labelled_only(&dim);
             labelled.sort_unstable();
             let mut sorted = domain.clone();
@@ -634,7 +723,7 @@ mod tests {
         // With no rule and no clause on a field, its labels are its domain.
         let wide = crate::dimension!(Wide, "wide", Evidence);
         let m = wide.schema().field("m").unwrap();
-        assert_eq!(field_domain(&wide, m, &[], 64).unwrap(), [2]);
+        assert_eq!(field_domain(&wide, m, &[], true, 64).unwrap(), [2]);
     }
 
     #[test]

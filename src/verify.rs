@@ -5,17 +5,23 @@
 //! flaga_solver, and answers the coherence questions. The stepper never calls
 //! this module; it only takes what it returns.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use big_bad_bool_core::BitFieldSpec;
 use big_bad_bool_interact::MatchOp;
 use stable_digest::StableDigest;
 
 use crate::codes::Finding;
+use crate::contract::{FactView, Outcome, evaluate};
 use crate::digest::{TRACE_FORMAT, TraceHeader, spec_digest};
 use crate::frame::Recognizer;
-use crate::model::{ContractId, DimensionSpec, ProgramSpec, ResolvedStackOp, field_value};
+use crate::model::{
+    ContractId, DimensionId, DimensionRole, DimensionSpec, ProgramSpec, ResolvedClause,
+    ResolvedItem, ResolvedStackOp, field_value,
+};
 use crate::step::ProjectionState;
+use crate::step::authorize::authorize;
+use crate::step::commit::commit;
 
 /// Bounds on the verifier's searches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -205,13 +211,8 @@ fn check_fixed(owner: &'static str, dim: &DimensionSpec, word: u128, found: &mut
 fn fixed_words(spec: &ProgramSpec, found: &mut Vec<Finding>) {
     let start = ProjectionState::start(spec);
     for (i, d) in spec.dims.iter().enumerate() {
-        if d.role() == crate::model::DimensionRole::State {
-            check_fixed(
-                "start",
-                d,
-                start.word(crate::model::DimensionId(i as u16)),
-                found,
-            );
+        if d.role() == DimensionRole::State {
+            check_fixed("start", d, start.word(DimensionId(i as u16)), found);
         }
     }
     check_fixed(
@@ -277,10 +278,25 @@ pub fn verify(
             return Err(report);
         }
     };
+    let index = ContractIndex::new(&spec);
+    sequences(&spec, &items, &mut report.findings);
+    let frames: Vec<u128> = std::iter::once(0)
+        .chain(recognizer.universe().iter().map(|f| f.word))
+        .collect();
+    for c in 0..spec.resolved.len() {
+        satisfiable(&spec, c, &items, &frames, limits, &mut report.findings);
+    }
+    report.states = search(
+        &spec,
+        &recognizer,
+        &index,
+        &items,
+        limits,
+        &mut report.findings,
+    );
     if !report.passed() {
         return Err(report);
     }
-    let index = ContractIndex::new(&spec);
     let digest = spec_digest(&spec);
     Ok(VerifiedProgram {
         spec,
@@ -290,4 +306,431 @@ pub fn verify(
         digest,
         report,
     })
+}
+
+/// Whether two sequence items accept a common item word.
+fn meet(
+    a: &ResolvedItem,
+    b: &ResolvedItem,
+    schema: &flaga_solver::Schema<'_>,
+    items: &[u128],
+) -> bool {
+    items
+        .iter()
+        .any(|w| a.matches(schema, *w) && b.matches(schema, *w))
+}
+
+/// Equal-length sequences that can match one window with different facts
+/// (error), and sequences that can match inside a longer one (info).
+fn sequences(spec: &ProgramSpec, items: &[u128], found: &mut Vec<Finding>) {
+    let schema = spec.dims[spec.item_dim].schema();
+    let seqs = &spec.sequences;
+    for (i, a) in seqs.iter().enumerate() {
+        for (j, b) in seqs.iter().enumerate() {
+            if i == j || a.items.is_empty() || b.items.is_empty() {
+                continue;
+            }
+            if a.items.len() == b.items.len() {
+                let same_window = a
+                    .items
+                    .iter()
+                    .zip(&b.items)
+                    .all(|(x, y)| meet(x, y, schema, items));
+                if i < j && same_window && a.facts != b.facts {
+                    found.push(Finding::OverlappingSequences {
+                        first: a.name,
+                        second: b.name,
+                    });
+                }
+            } else if a.items.len() < b.items.len() {
+                for at in 0..=b.items.len() - a.items.len() {
+                    if a.items
+                        .iter()
+                        .enumerate()
+                        .all(|(k, x)| meet(x, &b.items[at + k], schema, items))
+                    {
+                        found.push(Finding::ContainedSequence {
+                            inner: a.name,
+                            outer: b.name,
+                            at,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Values worth trying in one field: zero, the max, the default, every label,
+/// all labels together, and each clause constant with its neighbours.
+fn field_candidates(dim: &DimensionSpec, clauses: &[&ResolvedClause]) -> Vec<u128> {
+    let field = &clauses[0].field;
+    let max = field.max_value();
+    let schema = dim.schema();
+    let mut values = vec![0, max, field.default.unwrap_or(0)];
+    let labels: Vec<u128> = schema
+        .labels
+        .iter()
+        .filter(|l| l.field == field.name)
+        .map(|l| l.value)
+        .collect();
+    values.push(labels.iter().fold(0, |acc, v| acc | v));
+    values.extend(labels);
+    for c in clauses {
+        match c.op {
+            MatchOp::Any => {}
+            MatchOp::Eq(v) | MatchOp::NotEq(v) => {
+                values.extend([v, v.saturating_add(1), v.saturating_sub(1)])
+            }
+            MatchOp::RangeInclusive { min, max } => {
+                values.extend([min, max, min.saturating_sub(1), max.saturating_add(1)]);
+            }
+            MatchOp::MaskAll { mask } | MatchOp::MaskAny { mask } => values.push(mask),
+        }
+    }
+    values.retain(|v| *v <= max);
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
+/// Words of a state dimension worth trying: every combination of candidate
+/// values over the fields the clauses name, other fields at default, legal
+/// under flaga_solver. `None` past `cap`.
+fn state_witnesses(
+    dim: &DimensionSpec,
+    clauses: &[&ResolvedClause],
+    cap: u32,
+) -> Option<Vec<u128>> {
+    let mut words = vec![dim.default_word()];
+    let mut fields: Vec<&str> = clauses.iter().map(|c| c.field.name).collect();
+    fields.sort_unstable();
+    fields.dedup();
+    for name in fields {
+        let on_field: Vec<&ResolvedClause> = clauses
+            .iter()
+            .copied()
+            .filter(|c| c.field.name == name)
+            .collect();
+        let spec = on_field[0].field;
+        let values = field_candidates(dim, &on_field);
+        if (words.len() as u128).saturating_mul(values.len() as u128) > u128::from(cap) {
+            return None;
+        }
+        words = words
+            .iter()
+            .flat_map(|w| {
+                values
+                    .iter()
+                    .map(move |v| (w & !spec.mask) | (v << spec.shift))
+            })
+            .collect();
+    }
+    words.retain(|w| flaga_solver::check(dim.schema(), *w).is_ok_ignoring_deprecated());
+    Some(words)
+}
+
+/// Finds a contract none of whose REQUIRE-ANY choices has a witness word in
+/// every dimension it reads. Item words come from the labelled items, frame
+/// words from what the recognizer can produce, state words from the fields
+/// the clauses name.
+fn satisfiable(
+    spec: &ProgramSpec,
+    contract: usize,
+    items: &[u128],
+    frames: &[u128],
+    limits: VerifyLimits,
+    found: &mut Vec<Finding>,
+) {
+    let c = &spec.resolved[contract];
+    let empty = Vec::new();
+    let groups: Vec<&Vec<ResolvedClause>> = if c.require_any.is_empty() {
+        vec![&empty]
+    } else {
+        c.require_any.iter().collect()
+    };
+    let mut first_failure: Option<(usize, &'static str)> = None;
+    for group in groups {
+        let positive: Vec<&ResolvedClause> = c
+            .when
+            .iter()
+            .chain(&c.require)
+            .chain(group.iter())
+            .collect();
+        let mut dims: Vec<usize> = positive
+            .iter()
+            .chain(c.forbid.iter().collect::<Vec<_>>().iter())
+            .map(|cl| cl.dim)
+            .collect();
+        dims.sort_unstable();
+        dims.dedup();
+        let mut failure = None;
+        for d in dims {
+            let dim = &spec.dims[d];
+            let pos: Vec<&ResolvedClause> =
+                positive.iter().copied().filter(|cl| cl.dim == d).collect();
+            let neg: Vec<&ResolvedClause> = c.forbid.iter().filter(|cl| cl.dim == d).collect();
+            let fits = |w: u128| {
+                pos.iter().all(|cl| cl.holds(dim.schema(), w))
+                    && !neg.iter().any(|cl| cl.holds(dim.schema(), w))
+            };
+            let witnessed = if d == spec.item_dim {
+                items.iter().any(|w| fits(*w))
+            } else if d == spec.frame_dim {
+                frames.iter().any(|w| fits(*w))
+            } else {
+                let named: Vec<&ResolvedClause> = pos.iter().chain(neg.iter()).copied().collect();
+                match state_witnesses(dim, &named, limits.max_witness_tries) {
+                    Some(words) => words.iter().any(|w| fits(*w)),
+                    None => {
+                        found.push(Finding::TooManyStates {
+                            explored: u128::from(limits.max_witness_tries) + 1,
+                            permitted: u128::from(limits.max_witness_tries),
+                        });
+                        true
+                    }
+                }
+            };
+            if !witnessed {
+                let field = pos
+                    .iter()
+                    .map(|cl| cl.field.name)
+                    .find(|name| {
+                        let only: Vec<&&ResolvedClause> =
+                            pos.iter().filter(|cl| cl.field.name == *name).collect();
+                        let values =
+                            field_candidates(dim, &only.iter().map(|c| **c).collect::<Vec<_>>());
+                        !values.iter().any(|v| {
+                            let w = (dim.default_word() & !only[0].field.mask)
+                                | (v << only[0].field.shift);
+                            only.iter().all(|cl| cl.holds(dim.schema(), w))
+                        })
+                    })
+                    .unwrap_or("(joint)");
+                failure = Some((d, field));
+                break;
+            }
+        }
+        match failure {
+            None => return,
+            Some(f) => {
+                first_failure.get_or_insert(f);
+            }
+        }
+    }
+    if let Some((d, field)) = first_failure {
+        found.push(Finding::Unsatisfiable {
+            owner: c.name,
+            dimension: spec.dims[d].name(),
+            field,
+        });
+    }
+}
+
+/// One input of the state search: an item word and the frame word it is seen under.
+struct Input {
+    item: u128,
+    frame: u128,
+    sequence: Option<(usize, usize)>,
+}
+
+fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
+    let mut parts = Vec::new();
+    for (i, d) in spec.dims.iter().enumerate() {
+        if d.role() != DimensionRole::State {
+            continue;
+        }
+        let id = DimensionId(i as u16);
+        if d.stack_depth().is_some() {
+            let entries: Vec<String> = state.stack(id).iter().map(|w| d.describe(*w)).collect();
+            parts.push(format!("{}=[{}]", d.name(), entries.join(", ")));
+        } else {
+            parts.push(format!("{}={}", d.name(), d.describe(state.word(id))));
+        }
+    }
+    parts.join(" ")
+}
+
+/// Breadth-first search over committed states from the start state. Every
+/// input is a labelled item seen with no frame, or seen under a frame word
+/// whose focal offset accepts it. The successor of a state is what commit
+/// gives; the end item's successors are not followed. Returns the number of
+/// states visited.
+fn search(
+    spec: &ProgramSpec,
+    recognizer: &Recognizer,
+    index: &ContractIndex,
+    items: &[u128],
+    limits: VerifyLimits,
+    found: &mut Vec<Finding>,
+) -> usize {
+    let mut inputs: Vec<Input> = items
+        .iter()
+        .map(|&item| Input {
+            item,
+            frame: 0,
+            sequence: None,
+        })
+        .collect();
+    for f in recognizer.universe() {
+        for &item in items {
+            if recognizer.accepts(&f, item) {
+                inputs.push(Input {
+                    item,
+                    frame: f.word,
+                    sequence: Some((usize::from(f.sequence.0), usize::from(f.offset))),
+                });
+            }
+        }
+    }
+
+    let start = ProjectionState::start(spec);
+    let mut seen: HashSet<ProjectionState> = HashSet::from([start.clone()]);
+    let mut order: Vec<ProjectionState> = Vec::new();
+    let mut queue = VecDeque::from([start]);
+    let mut committed = vec![false; spec.resolved.len()];
+    let mut used: Vec<Vec<bool>> = spec
+        .sequences
+        .iter()
+        .map(|s| vec![false; s.items.len()])
+        .collect();
+    let mut ambiguous: Vec<(ContractId, ContractId)> = Vec::new();
+    let mut no_exit: Option<String> = None;
+    let mut complete = true;
+    let item_describe = &spec.dims[spec.item_dim];
+    let frame_describe = &spec.dims[spec.frame_dim];
+
+    while let Some(state) = queue.pop_front() {
+        let mut exit = false;
+        for input in &inputs {
+            let words = state.fact_words(spec, input.item, input.frame);
+            let view = FactView::new(
+                spec,
+                &words,
+                0,
+                input
+                    .sequence
+                    .map(|(s, _)| crate::model::SequenceId(s as u16)),
+            );
+            let candidates: Vec<_> = index
+                .lookup(input.item)
+                .into_iter()
+                .filter_map(|id| match evaluate(id, &view) {
+                    Outcome::Candidate(c) => Some(c),
+                    _ => None,
+                })
+                .collect();
+            match authorize(spec, &state, &candidates, 0, 0) {
+                Err(crate::codes::Refusal::Ambiguous { first, second, .. }) => {
+                    let ids = (
+                        spec.contract_id(first).unwrap_or(ContractId(0)),
+                        spec.contract_id(second).unwrap_or(ContractId(0)),
+                    );
+                    if !ambiguous.contains(&ids) {
+                        ambiguous.push(ids);
+                        found.push(Finding::Ambiguous {
+                            first,
+                            second,
+                            witness: format!(
+                                "{} item={} frame={}",
+                                render_state(spec, &state),
+                                item_describe.describe(input.item),
+                                if input.sequence.is_some() {
+                                    frame_describe.describe(input.frame)
+                                } else {
+                                    "none".to_owned()
+                                }
+                            ),
+                        });
+                    }
+                }
+                Err(_) => {}
+                Ok(transition) => {
+                    let contract = usize::from(transition.contract().0);
+                    let mut next = state.clone();
+                    if commit(spec, &mut next, transition).is_ok() {
+                        exit = true;
+                        committed[contract] = true;
+                        if let Some((s, o)) = input.sequence {
+                            used[s][o] = true;
+                        }
+                        if input.item != spec.end_word && seen.insert(next.clone()) {
+                            if seen.len() as u128 > limits.max_states {
+                                complete = false;
+                                break;
+                            }
+                            queue.push_back(next);
+                        }
+                    }
+                }
+            }
+        }
+        if !exit && no_exit.is_none() {
+            no_exit = Some(render_state(spec, &state));
+        }
+        order.push(state);
+        if !complete {
+            break;
+        }
+    }
+
+    if !complete {
+        found.push(Finding::TooManyStates {
+            explored: seen.len() as u128,
+            permitted: limits.max_states,
+        });
+        return seen.len();
+    }
+    if let Some(witness) = no_exit {
+        found.push(Finding::NoExit { witness });
+    }
+    for (c, done) in spec.resolved.iter().zip(&committed) {
+        if !done {
+            found.push(if c.emit.is_empty() {
+                Finding::DeadContract { owner: c.name }
+            } else {
+                Finding::ImpossibleEffect { owner: c.name }
+            });
+        }
+    }
+    for (s, offsets) in spec.sequences.iter().zip(&used) {
+        for (offset, done) in offsets.iter().enumerate() {
+            if !done {
+                found.push(Finding::DeadSequence {
+                    owner: s.name,
+                    offset,
+                });
+            }
+        }
+    }
+    for (i, d) in spec.dims.iter().enumerate() {
+        if d.role() != DimensionRole::State {
+            continue;
+        }
+        let id = DimensionId(i as u16);
+        let schema = d.schema();
+        for label in schema.labels {
+            let Some(field) = schema.field(label.field) else {
+                continue;
+            };
+            let reached = order.iter().any(|state| {
+                let words: Vec<u128> = if d.stack_depth().is_some() {
+                    state.stack(id).to_vec()
+                } else {
+                    vec![state.word(id)]
+                };
+                words
+                    .iter()
+                    .any(|w| schema.holds(field.name, field_value(field, *w), label.value))
+            });
+            if !reached {
+                found.push(Finding::Unreachable {
+                    dimension: d.name(),
+                    field: field.name,
+                    label: label.label,
+                });
+            }
+        }
+    }
+    order.len()
 }

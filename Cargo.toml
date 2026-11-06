@@ -23,6 +23,8 @@ ob-serve-a-bowl = { version = "0.2.2", optional = true }
 
 [dev-dependencies]
 big-bad-bool = "0.1.1"
+# Step 10: the shadow parser is compared with core-1o on its published fixtures.
+core-1o = "0.2.0"
 
 [lints.rust]
 unsafe_code = "forbid"

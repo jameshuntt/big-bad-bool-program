@@ -12,7 +12,7 @@ use liaise::LiaiseCodes;
 /// A problem with a spec, found by `build` (names, ranges, roles) or by
 /// `verify` (coherence). Severity `info` findings do not fail verification.
 #[derive(Debug, Clone, PartialEq, Eq, LiaiseCodes)]
-#[liaise(prefix = "BBBC", domain = "big-bad-bool-contract")]
+#[liaise(prefix = "BBBC", domain = "big-bad-bool-program")]
 pub enum Finding {
     /// A contract with no WHEN clause. interact's `EmptyRule`, for contracts.
     #[liaise(code = 1, msg = "`{owner}` has no WHEN clause", evidence(owner))]
@@ -354,7 +354,7 @@ pub enum Finding {
 
 /// Why one input position did not commit.
 #[derive(Debug, Clone, PartialEq, Eq, LiaiseCodes)]
-#[liaise(prefix = "BBBC", domain = "big-bad-bool-contract")]
+#[liaise(prefix = "BBBC", domain = "big-bad-bool-program")]
 pub enum Refusal {
     /// No contract gave a candidate. Default deny.
     #[liaise(

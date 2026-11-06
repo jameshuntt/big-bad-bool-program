@@ -1,12 +1,18 @@
 [package]
-name = "big-bad-bool-contract"
+name = "big-bad-bool-program"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["James Hunt <james@1o.business>"]
-description = "Contracts across Big Bad Bool packed words: framing, verification, and stepping with one write path."
 license = "MIT OR Apache-2.0"
-publish = false
+authors = ["James Hunt"]
+description = "Programs over Big Bad Bool packed words: typed dimensions, declarative contracts across them, bounded verification, and deterministic stepping with one write path."
+repository = "https://github.com/jameshuntt/big-bad-bool-program"
+readme = "README.md"
+keywords = ["bitpack", "bitfields", "contracts", "state-machine", "verification"]
+categories = ["data-structures", "encoding"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = []
@@ -23,9 +29,9 @@ ob-serve-a-bowl = { version = "0.2.2", optional = true }
 
 [dev-dependencies]
 big-bad-bool = "0.1.1"
-# Step 10: the shadow parser is compared with core-1o on its published fixtures.
+# A shadow parser written as a program is compared with core-1o on its published fixtures.
 core-1o = "0.2.0"
-# Step 11: klepto is the oracle for declarations and references in Rust;
+# klepto is the oracle for declarations and references in Rust;
 # proc-macro2 tokenizes the same files for the stepper.
 klepto = "0.3.5"
 proc-macro2 = { version = "1", features = ["span-locations"] }

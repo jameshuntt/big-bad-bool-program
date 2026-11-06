@@ -13,10 +13,10 @@ use stable_digest::StableDigest;
 use crate::model::{Clause, ItemMatch, ProgramSpec, RefusalRule, StackOp, Write};
 
 /// The material's first line. Changes when the material's form changes.
-pub const SPEC_FORMAT: &str = "big-bad-bool-contract.spec.v2";
+pub const SPEC_FORMAT: &str = "big-bad-bool-program.spec.v2";
 
 /// The trace format a [`TraceHeader`] names.
-pub const TRACE_FORMAT: &str = "big-bad-bool-contract.trace.v1";
+pub const TRACE_FORMAT: &str = "big-bad-bool-program.trace.v1";
 
 /// The head of a trace: which spec produced it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -28,7 +28,7 @@ pub struct TraceHeader {
 }
 
 impl TraceHeader {
-    /// `big-bad-bool-contract.trace.v1 spec=<hex>`.
+    /// `big-bad-bool-program.trace.v1 spec=<hex>`.
     #[must_use]
     pub fn render(&self) -> String {
         format!("{} spec={}", self.format, self.spec)

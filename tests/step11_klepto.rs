@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use big_bad_bool_contract::{Observation, Observer, StepEvent, Stepper, VerifiedProgram, verify};
+use big_bad_bool_program::{Observation, Observer, StepEvent, Stepper, VerifiedProgram, verify};
 use common::{EffectWord, FrameWord};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 

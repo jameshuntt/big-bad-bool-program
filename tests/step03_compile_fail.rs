@@ -22,7 +22,7 @@ const CASES: &[Case] = &[
     Case {
         name: "build_authorized_transition",
         source: r#"
-            use big_bad_bool_contract::{AuthorizedTransition, ContractId};
+            use big_bad_bool_program::{AuthorizedTransition, ContractId};
             pub fn forge() -> AuthorizedTransition {
                 AuthorizedTransition { contracts: vec![ContractId(0)], position: 0 }
             }
@@ -32,17 +32,17 @@ const CASES: &[Case] = &[
     Case {
         name: "candidate_is_not_a_transition",
         source: r#"
-            use big_bad_bool_contract::{AuthorizedTransition, Candidate};
+            use big_bad_bool_program::{AuthorizedTransition, Candidate};
             pub fn promote(c: Candidate) -> AuthorizedTransition {
                 c.into()
             }
         "#,
-        expected_stderr: "the trait bound `AuthorizedTransition: From<big_bad_bool_contract::Candidate>` is not satisfied",
+        expected_stderr: "the trait bound `AuthorizedTransition: From<big_bad_bool_program::Candidate>` is not satisfied",
     },
     Case {
         name: "write_state_words",
         source: r#"
-            use big_bad_bool_contract::ProjectionState;
+            use big_bad_bool_program::ProjectionState;
             pub fn write(state: &mut ProjectionState) {
                 state.words[0] = 1;
             }
@@ -52,7 +52,7 @@ const CASES: &[Case] = &[
     Case {
         name: "start_state",
         source: r#"
-            use big_bad_bool_contract::{ProgramSpec, ProjectionState};
+            use big_bad_bool_program::{ProgramSpec, ProjectionState};
             pub fn start(spec: &ProgramSpec) -> ProjectionState {
                 ProjectionState::start(spec)
             }
@@ -63,7 +63,7 @@ const CASES: &[Case] = &[
         name: "call_commit",
         source: r#"
             pub fn reach() {
-                let _ = big_bad_bool_contract::step::commit::commit;
+                let _ = big_bad_bool_program::step::commit::commit;
             }
         "#,
         expected_stderr: "module `step` is private",
@@ -72,15 +72,15 @@ const CASES: &[Case] = &[
         name: "call_authorize",
         source: r#"
             pub fn reach() {
-                let _ = big_bad_bool_contract::authorize;
+                let _ = big_bad_bool_program::authorize;
             }
         "#,
-        expected_stderr: "cannot find value `authorize` in crate `big_bad_bool_contract`",
+        expected_stderr: "cannot find value `authorize` in crate `big_bad_bool_program`",
     },
     Case {
         name: "fact_view_is_read_only",
         source: r#"
-            use big_bad_bool_contract::{DimensionId, FactView};
+            use big_bad_bool_program::{DimensionId, FactView};
             pub fn write(view: &FactView<'_>) {
                 view.word_mut(DimensionId(0));
             }
@@ -90,7 +90,7 @@ const CASES: &[Case] = &[
     Case {
         name: "stepper_state_is_shared",
         source: r#"
-            use big_bad_bool_contract::{NoObserver, ProjectionState, Stepper};
+            use big_bad_bool_program::{NoObserver, ProjectionState, Stepper};
             pub fn swap(stepper: &mut Stepper<'_, NoObserver>, other: ProjectionState) {
                 *stepper.state() = other;
             }
@@ -100,7 +100,7 @@ const CASES: &[Case] = &[
     Case {
         name: "stepper_has_no_state_mut",
         source: r#"
-            use big_bad_bool_contract::{NoObserver, Stepper};
+            use big_bad_bool_program::{NoObserver, Stepper};
             pub fn reach(stepper: &mut Stepper<'_, NoObserver>) {
                 let _ = stepper.state_mut();
             }
@@ -110,12 +110,12 @@ const CASES: &[Case] = &[
     Case {
         name: "observer_gets_shared_state",
         source: r#"
-            use big_bad_bool_contract::{Observer, StepEvent};
+            use big_bad_bool_program::{Observer, StepEvent};
             pub struct Meddler;
             impl Observer for Meddler {
                 fn observe(&mut self, event: &StepEvent<'_>) {
                     if let StepEvent::Committed { after, .. } = event {
-                        let state: &mut big_bad_bool_contract::ProjectionState = after;
+                        let state: &mut big_bad_bool_program::ProjectionState = after;
                         let _ = state;
                     }
                 }
@@ -126,7 +126,7 @@ const CASES: &[Case] = &[
     Case {
         name: "observer_cannot_change_the_authorized_set",
         source: r#"
-            use big_bad_bool_contract::{ContractId, Observer, StepEvent};
+            use big_bad_bool_program::{ContractId, Observer, StepEvent};
             pub struct Meddler;
             impl Observer for Meddler {
                 fn observe(&mut self, event: &StepEvent<'_>) {
@@ -141,7 +141,7 @@ const CASES: &[Case] = &[
     Case {
         name: "transition_has_no_plan_outside",
         source: r#"
-            use big_bad_bool_contract::AuthorizedTransition;
+            use big_bad_bool_program::AuthorizedTransition;
             pub fn peek(t: &AuthorizedTransition) {
                 let _ = t.plan();
             }
@@ -151,7 +151,7 @@ const CASES: &[Case] = &[
     Case {
         name: "build_verified_program",
         source: r#"
-            use big_bad_bool_contract::{ProgramSpec, VerifiedProgram};
+            use big_bad_bool_program::{ProgramSpec, VerifiedProgram};
             pub fn forge(spec: ProgramSpec) -> VerifiedProgram {
                 VerifiedProgram { spec }
             }
@@ -209,7 +209,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-big-bad-bool-contract = {{ path = "{lib}" }}
+big-bad-bool-program = {{ path = "{lib}" }}
 
 [workspace]
 "#

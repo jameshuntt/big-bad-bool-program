@@ -8,7 +8,7 @@
 //! `notify` are two effect dimensions.
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, Finding,
     NoObserver, Observation, Program, ProgramBuilder, ProjectionState, Refusal, RefusalRule,
     StepResult, Stepper, VerificationReport, VerifiedProgram, VerifyLimits, clause, contract,

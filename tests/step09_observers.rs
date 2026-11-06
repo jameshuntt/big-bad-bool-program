@@ -4,7 +4,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     NoObserver, Observer, ProjectionState, StepEvent, StepResult, Stepper, VerifiedProgram, verify,
 };
 
@@ -72,10 +72,10 @@ fn counting_observer_changes_nothing() {
 #[cfg(feature = "bowl")]
 #[test]
 fn bowl_adapter_sees_every_event_and_changes_nothing() {
-    use big_bad_bool_contract::ob_serve_a_bowl::{
+    use big_bad_bool_program::ob_serve_a_bowl::{
         ObservableWakeRuntime, ObserverConfig, WakeProfileCode,
     };
-    use big_bad_bool_contract::{BowlObserver, EventKind};
+    use big_bad_bool_program::{BowlObserver, EventKind};
 
     let program = program();
     for kinds in INPUTS {
@@ -103,8 +103,8 @@ fn bowl_adapter_sees_every_event_and_changes_nothing() {
 #[cfg(feature = "bowl")]
 #[test]
 fn bowl_packets_name_position_contract_and_changed_dimensions() {
-    use big_bad_bool_contract::BowlObserver;
-    use big_bad_bool_contract::ob_serve_a_bowl::{
+    use big_bad_bool_program::BowlObserver;
+    use big_bad_bool_program::ob_serve_a_bowl::{
         ObservableWakeRuntime, ObserverConfig, WakeProfileCode,
     };
 

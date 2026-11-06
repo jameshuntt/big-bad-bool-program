@@ -1,4 +1,5 @@
-//! Contracts across Big Bad Bool packed words.
+//! Programs over Big Bad Bool packed words: dimensions, contracts across them,
+//! optional framing, bounded verification, and stepping with one write path.
 //!
 //! A program is a list of dimensions (each one `#[bitpack]` type with a role),
 //! contracts between dimensions, containment limits, and, optionally, a frame
@@ -11,9 +12,14 @@
 //! The crate never names a language. Every name below a dimension comes from
 //! the user's `#[bitpack]` labels and sequence specs.
 //!
-//! Modules are future crate boundaries:
+//! The public API is re-exported here. Inside, each module depends only on
+//! the ones before it:
 //! `codes` <- `model` <- `frame` <- `contract` <- `step` <- `verify` (+ `digest`)
 //! <- `observe` <- `stepper`, and the `bowl` adapter on top.
+//!
+//! `examples/thermostat.rs` is a program with no framing;
+//! `examples/declarations.rs` uses framing to tell declarations from
+//! references.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

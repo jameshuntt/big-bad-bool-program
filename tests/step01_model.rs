@@ -3,11 +3,11 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_interact::{Action, Rule, RuleTable, RuleValidationFinding, validate_rule_table};
+use big_bad_bool_program::{
     ContractSpec, DimensionId, DimensionRole, FieldMatcher, Finding, Liaise, Program,
     ProgramBuilder, RecognizerSpec, clause, contract, dimension, pop, push, set,
 };
-use big_bad_bool_interact::{Action, Rule, RuleTable, RuleValidationFinding, validate_rule_table};
 use common::{CONTAINMENT, FrameWord, StateWord, TokenWord};
 
 #[test]
@@ -90,7 +90,7 @@ fn base() -> ProgramBuilder {
         .contain(CONTAINMENT)
 }
 
-fn leak_clauses(matchers: &[FieldMatcher]) -> &'static [big_bad_bool_contract::Clause] {
+fn leak_clauses(matchers: &[FieldMatcher]) -> &'static [big_bad_bool_program::Clause] {
     let clauses: Vec<_> = matchers.iter().map(|m| clause("token", *m)).collect();
     Box::leak(clauses.into_boxed_slice())
 }
@@ -202,7 +202,7 @@ fn unknown_dimension_is_refused() {
 
 #[test]
 fn roles_decide_who_writes() {
-    const WHEN: &[big_bad_bool_contract::Clause] = &[clause("token", FieldMatcher::eq("kind", 1))];
+    const WHEN: &[big_bad_bool_program::Clause] = &[clause("token", FieldMatcher::eq("kind", 1))];
     const WRITES_EVIDENCE: ContractSpec = contract("writes-evidence")
         .when(WHEN)
         .transition(&[set("token", "kind", 2)]);
@@ -349,7 +349,7 @@ fn missing_parts_duplicates_and_stack_bounds() {
 
 #[test]
 fn sequence_checks() {
-    use big_bad_bool_contract::{ItemMatch, OffsetFacts, SequenceSpec, sequence};
+    use big_bad_bool_program::{ItemMatch, OffsetFacts, SequenceSpec, sequence};
     const EMPTY_SEQ: SequenceSpec = sequence("empty", &[]);
     const LONG: SequenceSpec = sequence("long", &[ItemMatch::Any; 5]);
     const BAD_FACT: SequenceSpec = sequence("bad-fact", &[ItemMatch::Any]).facts(&[OffsetFacts {

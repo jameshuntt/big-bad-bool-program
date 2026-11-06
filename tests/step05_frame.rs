@@ -5,7 +5,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     FieldMatcher, FieldValue, FrameFacts, ItemMatch, Position, Program, ProgramSpec, Recognizer,
     RecognizerSpec, SequenceId, SequenceSpec, dimension, sequence,
 };

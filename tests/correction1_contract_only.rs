@@ -6,7 +6,7 @@
 //! state, `command` is the effect.
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, Finding, NoObserver,
     Observation, Program, ProgramBuilder, Recognizer, RecognizerSpec, RefusalRule, StepResult,
     Stepper, VerifiedProgram, VerifyLimits, clause, contract, dimension, set, spec_material,
@@ -67,13 +67,13 @@ const MANUAL: u128 = Mode::LABEL_KIND_MANUAL.value;
 const OFF: u128 = Heater::LABEL_STATE_OFF.value;
 const ON: u128 = Heater::LABEL_STATE_ON.value;
 
-const fn reading(level: u128) -> big_bad_bool_contract::Clause {
+const fn reading(level: u128) -> big_bad_bool_program::Clause {
     clause("reading", FieldMatcher::eq("level", level))
 }
-const fn mode(kind: u128) -> big_bad_bool_contract::Clause {
+const fn mode(kind: u128) -> big_bad_bool_program::Clause {
     clause("mode", FieldMatcher::eq("kind", kind))
 }
-const fn heater(state: u128) -> big_bad_bool_contract::Clause {
+const fn heater(state: u128) -> big_bad_bool_program::Clause {
     clause("heater", FieldMatcher::eq("state", state))
 }
 

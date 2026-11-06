@@ -7,7 +7,7 @@
 //! dimensions, `access` is state, `log` is the effect.
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, Finding,
     Observation, Program, ProgramBuilder, ProgramSpec, RecognizerSpec, Refusal, RefusalRule,
     StepResult, Stepper, VerifiedProgram, VerifyLimits, clause, contract, dimension, set, verify,
@@ -192,7 +192,7 @@ fn line(spec: &ProgramSpec, r: &StepResult) -> String {
 fn three_evidence_dimensions_meet_in_one_contract() {
     let program = program();
     let spec = program.spec();
-    let mut stepper = Stepper::new(&program, big_bad_bool_contract::NoObserver);
+    let mut stepper = Stepper::new(&program, big_bad_bool_program::NoObserver);
     let inputs = [
         observe(0, &[(BADGE, STAFF), (CLOCK, NIGHT), (DOOR, CLOSED)]),
         observe(1, &[(BADGE, VISITOR), (CLOCK, NIGHT), (DOOR, CLOSED)]),
@@ -228,7 +228,7 @@ fn three_evidence_dimensions_meet_in_one_contract() {
 #[test]
 fn an_absent_dimension_reads_as_nothing() {
     let program = program();
-    let mut stepper = Stepper::new(&program, big_bad_bool_contract::NoObserver);
+    let mut stepper = Stepper::new(&program, big_bad_bool_program::NoObserver);
     // Staff at night with no door word: WHEN holds, REQUIRE on the door does not.
     let r = stepper.push(observe(0, &[(BADGE, STAFF), (CLOCK, NIGHT)]));
     assert_eq!(
@@ -252,7 +252,7 @@ fn an_absent_dimension_reads_as_nothing() {
 #[test]
 fn an_observation_holds_only_observed_evidence() {
     let program = program();
-    let mut stepper = Stepper::new(&program, big_bad_bool_contract::NoObserver);
+    let mut stepper = Stepper::new(&program, big_bad_bool_program::NoObserver);
     let start = stepper.state().clone();
     let refusal = |o: Observation| stepper_refusal(&program, o);
     assert_eq!(
@@ -301,7 +301,7 @@ fn an_observation_holds_only_observed_evidence() {
 }
 
 fn stepper_refusal(program: &VerifiedProgram, o: Observation) -> Refusal {
-    let mut stepper = Stepper::new(program, big_bad_bool_contract::NoObserver);
+    let mut stepper = Stepper::new(program, big_bad_bool_program::NoObserver);
     let r = stepper.push(o);
     assert!(r[0].committed.is_empty());
     r[0].refusals.last().unwrap().clone()
@@ -328,7 +328,7 @@ fn the_verifier_reads_every_evidence_dimension() {
     assert!(program.report().passed(), "{:?}", program.report().findings);
 
     // The representatives draw from every evidence dimension, not only the item.
-    let stepper = Stepper::new(&program, big_bad_bool_contract::NoObserver);
+    let stepper = Stepper::new(&program, big_bad_bool_program::NoObserver);
     let next = stepper.legal_next_representatives();
     assert!(next.contains(&observe(
         0,

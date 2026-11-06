@@ -3,7 +3,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, FieldMatcher, ProgramBuilder, RefusalRule, SPEC_FORMAT,
     TRACE_FORMAT, clause, spec_digest, spec_material, verify,
 };
@@ -12,7 +12,7 @@ fn with_contracts(contracts: &[ContractSpec]) -> ProgramBuilder {
     contracts
         .iter()
         .fold(
-            common::dimensions(big_bad_bool_contract::Program::new()).recognize(common::RECOGNIZER),
+            common::dimensions(big_bad_bool_program::Program::new()).recognize(common::RECOGNIZER),
             |b, c| b.contract(*c),
         )
         .contain(common::CONTAINMENT)
@@ -29,7 +29,7 @@ fn section_16_digest_is_fixed() {
     assert!(material.contains("contract[2].name=declare-function-name\n"));
     assert!(material.contains("contract[2].forbid[0]=context.marks eq:1\n"));
     // Spec format v2 (correction 3) carries the fan-out limit.
-    assert!(material.starts_with("big-bad-bool-contract.spec.v2\n"));
+    assert!(material.starts_with("big-bad-bool-program.spec.v2\n"));
     assert!(material.contains("containment.max_actualized=4\n"));
 }
 
@@ -66,7 +66,7 @@ fn a_trace_header_carries_the_digest() {
     assert_eq!(header.spec, spec_digest(program.spec()));
     assert_eq!(
         header.render(),
-        format!("big-bad-bool-contract.trace.v1 spec={}", program.digest())
+        format!("big-bad-bool-program.trace.v1 spec={}", program.digest())
     );
     assert_eq!(program.digest().as_str().len(), 64);
 }

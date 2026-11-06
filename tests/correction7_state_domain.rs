@@ -17,7 +17,7 @@
 //! `read-mask`, `read-high` and `read-joint`; each test names what it missed.
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, Finding, NoObserver,
     Observation, Program, ProgramSpec, RefusalRule, Stepper, VerificationReport, VerifiedProgram,
     VerifyLimits, clause, contract, dimension, set, verify,

@@ -28,22 +28,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "big-bad-bool-contract"
-version = "0.1.0"
-dependencies = [
- "big-bad-bool",
- "big-bad-bool-core",
- "big-bad-bool-interact",
- "core-1o",
- "flaga_solver",
- "klepto",
- "liaise",
- "ob-serve-a-bowl",
- "proc-macro2",
- "stable_digest",
-]
-
-[[package]]
 name = "big-bad-bool-core"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -70,6 +54,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d481e0eba87efb0eafea35f99414f3bd624c0bb73a4a83b317759117e6a8db6"
 dependencies = [
  "big-bad-bool-core",
+]
+
+[[package]]
+name = "big-bad-bool-program"
+version = "0.1.0"
+dependencies = [
+ "big-bad-bool",
+ "big-bad-bool-core",
+ "big-bad-bool-interact",
+ "core-1o",
+ "flaga_solver",
+ "klepto",
+ "liaise",
+ "ob-serve-a-bowl",
+ "proc-macro2",
+ "stable_digest",
 ]
 
 [[package]]

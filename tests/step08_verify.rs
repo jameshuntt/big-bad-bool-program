@@ -3,7 +3,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     ContractSpec, FieldMatcher, FieldValue, Finding, ItemMatch, Liaise, OffsetFacts,
     ProgramBuilder, RecognizerSpec, SequenceSpec, VerificationReport, VerifyLimits, clause,
     contract, sequence, set, verify,
@@ -20,7 +20,7 @@ fn with(contracts: &[ContractSpec], sequences: &'static [SequenceSpec]) -> Progr
     contracts
         .iter()
         .fold(
-            common::dimensions(big_bad_bool_contract::Program::new()).recognize(RecognizerSpec {
+            common::dimensions(big_bad_bool_program::Program::new()).recognize(RecognizerSpec {
                 sequences,
                 ..common::RECOGNIZER
             }),
@@ -79,7 +79,7 @@ const fn facts(
     }
 }
 
-const fn token(kind: u128) -> big_bad_bool_contract::Clause {
+const fn token(kind: u128) -> big_bad_bool_program::Clause {
     clause("token", FieldMatcher::eq("kind", kind))
 }
 

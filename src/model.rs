@@ -852,7 +852,7 @@ pub struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    /// Adds a dimension. The name is the report's assembly verb, not `ops::Add`.
+    /// Adds a dimension. The name is the assembly verb, not `ops::Add`.
     #[allow(clippy::should_implement_trait)]
     #[must_use]
     pub fn add(mut self, dimension: DimensionSpec) -> Self {

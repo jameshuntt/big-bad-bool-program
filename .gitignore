@@ -1,1 +1,6 @@
-target/
+/target
+.DS_Store
+.env
+.env.*
+*.pem
+*.key

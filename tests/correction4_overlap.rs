@@ -10,7 +10,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     ContractSpec, FieldMatcher, FieldValue, Finding, ItemMatch, NoObserver, OffsetFacts,
     Recognizer, RecognizerSpec, SequenceSpec, StepResult, Stepper, VerificationReport,
     VerifiedProgram, clause, contract, sequence, verify,
@@ -22,7 +22,7 @@ fn program_with(
     sequences: &'static [SequenceSpec],
 ) -> VerificationReport {
     let builder = contracts.iter().fold(
-        common::dimensions(big_bad_bool_contract::Program::new()).recognize(RecognizerSpec {
+        common::dimensions(big_bad_bool_program::Program::new()).recognize(RecognizerSpec {
             sequences,
             ..common::RECOGNIZER
         }),
@@ -39,7 +39,7 @@ fn program_with(
 
 fn verified(contracts: &[ContractSpec]) -> VerifiedProgram {
     let builder = contracts.iter().fold(
-        common::dimensions(big_bad_bool_contract::Program::new()).recognize(common::RECOGNIZER),
+        common::dimensions(big_bad_bool_program::Program::new()).recognize(common::RECOGNIZER),
         |b, c| b.contract(*c),
     );
     verify(

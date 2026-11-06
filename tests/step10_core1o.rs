@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, ItemMatch,
     Observation, OffsetFacts, Program, RecognizerSpec, RefusalRule, SequenceSpec, StackOp, Stepper,
     VerifiedProgram, VerifyLimits, Write, clause, contract, dimension, pop, push, sequence, set,
@@ -269,7 +269,7 @@ fn render_nodes(nodes: &[Node]) -> String {
 
 /// The shadow's verdict: `Some(structure)` when every position committed.
 fn shadow(program: &VerifiedProgram, tokens: &[Token]) -> Option<String> {
-    let mut stepper = Stepper::new(program, big_bad_bool_contract::NoObserver);
+    let mut stepper = Stepper::new(program, big_bad_bool_program::NoObserver);
     let mut results = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
         results

@@ -9,7 +9,7 @@
 //! moves it to `Closed` only on the end item.
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, FieldValue, Finding, NoObserver,
     Observation, Program, ProgramSpec, RecognizerSpec, Refusal, RefusalRule, StepResult, Stepper,
     VerifiedProgram, VerifyLimits, clause, contract, dimension, set, verify,
@@ -62,11 +62,11 @@ const CLOSED: u128 = Phase::LABEL_STATE_CLOSED.value;
 const SIGNAL: DimensionId = DimensionId(0);
 const PHASE: DimensionId = DimensionId(2);
 
-const fn signal(kind: u128) -> big_bad_bool_contract::Clause {
+const fn signal(kind: u128) -> big_bad_bool_program::Clause {
     clause("signal", FieldMatcher::eq("kind", kind))
 }
 
-const fn phase(state: u128) -> big_bad_bool_contract::Clause {
+const fn phase(state: u128) -> big_bad_bool_program::Clause {
     clause("phase", FieldMatcher::eq("state", state))
 }
 

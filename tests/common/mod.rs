@@ -1,10 +1,10 @@
-//! Section 16 of the architecture report, written as test data: five
+//! The reference program ("section 16"), written as test data: five
 //! dimensions, five sequences, fifteen contracts. None of it is in the library.
 
 #![allow(dead_code)]
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractSpec, FieldMatcher, FieldValue, ItemMatch, Observation,
     OffsetFacts, Program, ProgramBuilder, RecognizerSpec, RefusalRule, SequenceSpec, StackOp,
     Write, clause, contract, dimension, pop, push, sequence, set,
@@ -556,7 +556,7 @@ pub fn program() -> ProgramBuilder {
 }
 
 /// The token dimension: the first one added, and the recognizer's item dimension.
-pub const TOKEN: big_bad_bool_contract::DimensionId = big_bad_bool_contract::DimensionId(0);
+pub const TOKEN: big_bad_bool_program::DimensionId = big_bad_bool_program::DimensionId(0);
 
 /// One observation per token kind, positions from `first`.
 pub fn tokens(first: u32, kinds: &[u128]) -> Vec<Observation> {
@@ -583,7 +583,7 @@ pub const BAR_FOO: &[u128] = &[IDENT, LPAREN, IDENT, RPAREN];
 
 // ---- rendering for golden files ----
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     DimensionId, DimensionRole, FrameFacts, Observer, ProgramSpec, ProjectionState, StepEvent,
     StepResult,
 };
@@ -670,7 +670,7 @@ pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
 }
 
 /// Contract names joined by `+`, in the order given.
-pub fn names(spec: &ProgramSpec, ids: &[big_bad_bool_contract::ContractId]) -> String {
+pub fn names(spec: &ProgramSpec, ids: &[big_bad_bool_program::ContractId]) -> String {
     ids.iter()
         .map(|id| spec.contract(*id).unwrap().name)
         .collect::<Vec<_>>()
@@ -730,7 +730,7 @@ pub fn golden(name: &str, actual: &str) {
 }
 
 /// Default limits for the section 16 program.
-pub const LIMITS: big_bad_bool_contract::VerifyLimits = big_bad_bool_contract::VerifyLimits {
+pub const LIMITS: big_bad_bool_program::VerifyLimits = big_bad_bool_program::VerifyLimits {
     max_states: 100_000,
     max_witness_tries: 4_096,
 };

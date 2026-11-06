@@ -4,7 +4,7 @@
 mod common;
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Candidate, ContractId, ContractSpec, FactView, FieldMatcher, FrameFacts, MatchOp, Outcome,
     ProgramSpec, Refusal, SequenceId, clause, contract, dimension, evaluate,
 };
@@ -280,7 +280,7 @@ const ANY_HOT_OR_COLD: ContractSpec =
 
 #[test]
 fn flag_field_labels_hold_through_schema_holds() {
-    let spec = common::dimensions(big_bad_bool_contract::Program::new())
+    let spec = common::dimensions(big_bad_bool_program::Program::new())
         .add(dimension!(JobWord, "job", State))
         .recognize(common::RECOGNIZER)
         .contain(common::CONTAINMENT)

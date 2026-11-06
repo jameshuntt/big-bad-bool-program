@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use big_bad_bool::bitpack;
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     Clause, ContainmentSpec, ContractId, ContractSpec, DimensionId, FactView, FieldMatcher,
     Finding, NoObserver, Observation, Outcome, Program, ProgramSpec, Refusal, RefusalRule, Stepper,
     VerificationReport, VerifiedProgram, VerifyLimits, clause, contract, dimension, evaluate, set,

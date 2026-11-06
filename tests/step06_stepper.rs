@@ -3,7 +3,7 @@
 
 mod common;
 
-use big_bad_bool_contract::{
+use big_bad_bool_program::{
     ContainmentSpec, NoObserver, Observation, ProgramSpec, RefusalRule, StepResult, Stepper,
     VerifiedProgram, verify,
 };
@@ -179,7 +179,7 @@ fn bar_foo_at_module_level_stops() {
             "0: refused [[BBBC0102] `callee-reference` refused at position 0: require_any needs context.expecting in {Statement, Expr}, observed Item; [BBBC0101] no contract accepts position 0 (1 refused)]"
         ]
     );
-    let report = big_bad_bool_contract::Liaise::liaise_report(&results[0].refusals[0]);
+    let report = big_bad_bool_program::Liaise::liaise_report(&results[0].refusals[0]);
     assert_eq!(report.evidence_value("contract"), Some("callee-reference"));
     assert_eq!(
         report.evidence_value("missing"),

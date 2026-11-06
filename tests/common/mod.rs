@@ -650,7 +650,7 @@ pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
             "candidate {} via {}",
             spec.contract(c.contract).unwrap().name,
             c.frame
-                .map_or("no frame", |s| spec.sequence(s).unwrap().name)
+                .map_or("no frame", |f| spec.sequence(f.sequence).unwrap().name)
         ),
         StepEvent::Refused(r) => format!("refused {r}"),
         StepEvent::Authorized(ids) => format!("authorized {}", names(spec, ids)),

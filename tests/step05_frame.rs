@@ -1,4 +1,7 @@
-//! Step 5: offsets, positions, boundary, longest-match and end padding.
+//! Step 5: offsets, positions, boundary, contained matches and end padding.
+//!
+//! Since correction 4 a match inside a longer one is kept beside it, not
+//! dropped: `FnHead` coexists with `AsyncFnHead` and adds no contradiction.
 
 mod common;
 
@@ -37,7 +40,11 @@ fn frame_word(f: &FrameFacts) -> FrameWord {
 fn async_fn_foo_gives_foo_s1_offset_2() {
     let spec = spec();
     let kinds = [KW_ASYNC, KW_FN, IDENT, LPAREN];
-    assert_eq!(frames(&spec, &kinds, 2), [("AsyncFnHead", 2)]);
+    // FnHead offset 1 is kept beside AsyncFnHead offset 2 (correction 4).
+    assert_eq!(
+        frames(&spec, &kinds, 2),
+        [("AsyncFnHead", 2), ("FnHead", 1)]
+    );
     let found = Recognizer::new(&spec).unwrap().recognize(&items(&kinds), 2);
     let word = frame_word(&found[0]);
     assert_eq!(word.sequence(), 1);
@@ -75,13 +82,16 @@ fn fn_bar_foo_colon_gives_s3_not_s5() {
 }
 
 #[test]
-fn positions_and_longest_match() {
+fn positions_and_contained_matches() {
     let spec = spec();
     let kinds = [KW_ASYNC, KW_FN, IDENT, LPAREN, IDENT, COLON, IDENT, RPAREN];
     // `async`: S1 begins.
     assert_eq!(frames(&spec, &kinds, 0), [("AsyncFnHead", 0)]);
-    // `fn`: S2 offset 0 lies inside S1, so only S1 offset 1 remains.
-    assert_eq!(frames(&spec, &kinds, 1), [("AsyncFnHead", 1)]);
+    // `fn`: S2 offset 0 lies inside S1 and is kept beside S1 offset 1.
+    assert_eq!(
+        frames(&spec, &kinds, 1),
+        [("AsyncFnHead", 1), ("FnHead", 0)]
+    );
     let found = Recognizer::new(&spec).unwrap().recognize(&items(&kinds), 0);
     assert_eq!(
         u128::from(frame_word(&found[0]).position()),
@@ -102,8 +112,8 @@ fn an_item_that_ends_one_match_and_begins_another_is_a_boundary() {
             (f.sequence.0, f.offset, w.position(), w.marks() & 1)
         })
         .collect();
-    // S1 offset 3 End and S3 offset 0 Begin, both with the boundary flag.
-    assert_eq!(shapes, [(0, 3, 3, 1), (2, 0, 1, 1)]);
+    // S1 offset 3 End, S2 offset 2 End and S3 offset 0 Begin, all with the boundary flag.
+    assert_eq!(shapes, [(0, 3, 3, 1), (1, 2, 3, 1), (2, 0, 1, 1)]);
     let at_colon = recognizer.recognize(&items(&kinds), 5);
     let shapes: Vec<(u16, u8, u32, u32)> = at_colon
         .iter()

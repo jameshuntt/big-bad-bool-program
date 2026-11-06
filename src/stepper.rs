@@ -14,11 +14,10 @@
 use std::collections::VecDeque;
 
 use crate::codes::Refusal;
-use crate::contract::{FactView, Outcome, evaluate};
-use crate::frame::{FrameFacts, Recognizer};
+use crate::frame::FrameFacts;
 use crate::model::{ContractId, DimensionRole, Observation, ProgramSpec, RefusalRule};
 use crate::observe::{Observer, StepEvent};
-use crate::step::authorize::authorize;
+use crate::step::authorize::{Gathered, authorize, gather};
 use crate::step::commit::{check, commit};
 use crate::step::limits::{Limit, within};
 use crate::step::{Effect, ProjectionState};
@@ -127,46 +126,31 @@ impl<'p, O: Observer> Stepper<'p, O> {
     }
 
     /// The observations some contract would accept and containment would
-    /// authorize at the next focal position, from the current state, over
-    /// every frame interpretation the recognizer can produce for the item.
-    /// Each is one of [`VerifiedProgram::inputs`], at the next position.
+    /// authorize at the next focal position, from the current state, under
+    /// some full set of frame interpretations the recognizer can give the
+    /// item. Each is one of [`VerifiedProgram::inputs`], at the next position.
     /// Read only: prediction may rank this set, never add to it.
     #[must_use]
     pub fn legal_next(&self) -> Vec<Observation> {
         let program = self.program;
         let spec = program.spec();
-        let recognizer = program.recognizer();
-        let frames = recognizer.map(Recognizer::universe).unwrap_or_default();
         let next = u32::try_from(self.next).unwrap_or(u32::MAX);
+        let permitted = usize::from(spec.containment().max_interpretations);
         program
             .inputs()
             .iter()
-            .filter(|input| {
-                let item = spec.item_dimension().and_then(|d| input.word(d));
-                let mut views = std::iter::once(None).chain(
-                    frames
-                        .iter()
-                        .filter(|f| item.zip(recognizer).is_some_and(|(w, r)| r.accepts(f, w)))
-                        .map(Some),
-                );
-                views.any(|frame: Option<&FrameFacts>| {
-                    let words = self
-                        .state
-                        .fact_words(spec, input, frame.map_or(0, |f| f.word));
-                    let view = FactView::new(spec, &words, next, frame.map(|f| f.sequence));
-                    let candidates: Vec<_> = program
-                        .index()
-                        .lookup(input)
-                        .into_iter()
-                        .filter_map(|id| match evaluate(id, &view) {
-                            Outcome::Candidate(c) => Some(c),
-                            _ => None,
-                        })
-                        .collect();
-                    authorize(spec, &self.state, &candidates, next, 0).is_ok()
-                })
-            })
             .map(|input| at(next, input))
+            .filter(|input| {
+                let ids = program.index().lookup(input);
+                program
+                    .frame_sets(input)
+                    .iter()
+                    .filter(|frames| frames.len() <= permitted)
+                    .any(|frames| {
+                        let found = gather(spec, &self.state, &ids, input, frames);
+                        authorize(spec, &self.state, &found.candidates, next, 0).is_ok()
+                    })
+            })
             .collect()
     }
 
@@ -239,42 +223,19 @@ impl<'p, O: Observer> Stepper<'p, O> {
         let program = self.program;
         let spec = program.spec();
         let position = observation.position();
-        let views: Vec<Option<&FrameFacts>> = if frames.is_empty() {
-            vec![None]
-        } else {
-            frames.iter().map(Some).collect()
-        };
         let ids = program.index().lookup(observation);
-        let mut candidates = Vec::new();
-        let mut refused: Vec<(ContractId, Refusal)> = Vec::new();
-        for frame in views {
-            let words = self
-                .state
-                .fact_words(spec, observation, frame.map_or(0, |f| f.word));
-            let view = FactView::new(spec, &words, position, frame.map(|f| f.sequence));
-            for &id in &ids {
-                match evaluate(id, &view) {
-                    Outcome::NotApplicable => {}
-                    Outcome::Candidate(c) => {
-                        self.observer.observe(&StepEvent::Candidate(&c));
-                        candidates.push(c);
-                    }
-                    Outcome::Refused(r) => {
-                        if !refused.iter().any(|(seen, _)| *seen == id) {
-                            refused.push((id, r));
-                        }
-                    }
-                }
-            }
+        let Gathered {
+            candidates,
+            refused,
+        } = gather(spec, &self.state, &ids, observation, frames);
+        for c in &candidates {
+            self.observer.observe(&StepEvent::Candidate(c));
         }
-        refused.retain(|(id, _)| !candidates.iter().any(|c| c.contract == *id));
-        // Name order, so the refusals do not depend on the order contracts were declared in.
-        refused.sort_by_key(|(id, _)| spec.resolved[usize::from(id.0)].name);
 
         match authorize(spec, &self.state, &candidates, position, refused.len()) {
             Err(refusal) => {
                 let mut all: Vec<Refusal> = if matches!(refusal, Refusal::NoContract { .. }) {
-                    refused.into_iter().map(|(_, r)| r).collect()
+                    refused
                 } else {
                     Vec::new()
                 };

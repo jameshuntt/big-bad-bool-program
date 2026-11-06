@@ -47,6 +47,13 @@ fn section_16_passes_with_info_only() {
                 outer: "AsyncFnHead",
                 at: 1
             },
+            // Lexically ambiguous placements, kept and listed (correction 4).
+            // The contracts never read `construct` under two of them at once.
+            facts("AsyncFnHead", 2, "CallWithArg", 0),
+            facts("AsyncFnHead", 3, "CallWithArg", 1),
+            facts("FnHead", 1, "CallWithArg", 0),
+            facts("FnHead", 2, "CallWithArg", 1),
+            facts("TypeAfterColon", 1, "CallWithArg", 0),
             Finding::Unreachable {
                 dimension: "context",
                 field: "marks",
@@ -55,6 +62,21 @@ fn section_16_passes_with_info_only() {
         ]
     );
     println!("states {}", report.states);
+}
+
+const fn facts(
+    first: &'static str,
+    first_offset: usize,
+    second: &'static str,
+    second_offset: usize,
+) -> Finding {
+    Finding::OverlappingFacts {
+        first,
+        first_offset,
+        second,
+        second_offset,
+        field: "construct",
+    }
 }
 
 const fn token(kind: u128) -> big_bad_bool_contract::Clause {
@@ -120,7 +142,7 @@ fn conflicting_k1_k2_pair() {
             first: "fn-head-begin",
             second: "fn-keyword-after-modifier",
             target: "state.phase".to_owned(),
-            witness: "context=[{scope=Module, expecting=Item, marks=none}] state={phase=FnHead, marks=can_declare} evidence=token={kind=KwFn} frame={sequence=FnHead, offset=0, position=Begin, marks=none, construct=FunctionDeclaration, role=None, modifier=None}".to_owned(),
+            witness: "context=[{scope=Module, expecting=Item, marks=none}] state={phase=FnHead, marks=can_declare} evidence=token={kind=KwFn} frame={sequence=AsyncFnHead, offset=1, position=Interior, marks=none, construct=FunctionDeclaration, role=None, modifier=Async} & {sequence=FnHead, offset=0, position=Begin, marks=none, construct=FunctionDeclaration, role=None, modifier=None}".to_owned(),
         }]
     );
     assert_eq!(conflicts[0].code(), "BBBC0030");
@@ -250,21 +272,38 @@ const WITH_S7: &[SequenceSpec] = &[
 ];
 
 #[test]
-fn overlapping_sequences() {
+fn overlapping_facts_are_listed_not_dropped() {
+    // CallTwin matches every window CallWithArg matches with `)`, and says
+    // construct FunctionDeclaration where CallWithArg says CallCallee. Neither is
+    // dropped: the pair is an info finding, and no contract reads `construct`
+    // under both while actualizing, so verification passes.
     let report = report(with(common::CONTRACTS, WITH_S7));
     let overlap = report
         .findings
         .iter()
-        .find(|f| matches!(f, Finding::OverlappingSequences { .. }))
+        .find(|f| {
+            matches!(
+                f,
+                Finding::OverlappingFacts {
+                    first: "CallWithArg",
+                    second: "CallTwin",
+                    ..
+                }
+            )
+        })
         .unwrap();
     assert_eq!(
         overlap,
-        &Finding::OverlappingSequences {
+        &Finding::OverlappingFacts {
             first: "CallWithArg",
-            second: "CallTwin"
+            first_offset: 0,
+            second: "CallTwin",
+            second_offset: 0,
+            field: "construct"
         }
     );
-    assert_eq!(overlap.code(), "BBBC0027");
+    assert_eq!(overlap.code(), "BBBC0031");
+    assert_eq!(overlap.severity(), liaise::LiaiseSeverity::Info);
 }
 
 #[test]
@@ -278,7 +317,12 @@ fn contained_sequence_is_info() {
 #[test]
 fn unreachable_is_info() {
     let program = verify(common::program().build().unwrap(), common::LIMITS).unwrap();
-    let unreachable = &program.report().findings[1];
+    let unreachable = program
+        .report()
+        .findings
+        .iter()
+        .find(|f| matches!(f, Finding::Unreachable { .. }))
+        .unwrap();
     assert_eq!(unreachable.code(), "BBBC0022");
     assert_eq!(
         unreachable.to_string(),

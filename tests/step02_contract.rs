@@ -5,8 +5,8 @@ mod common;
 
 use big_bad_bool::bitpack;
 use big_bad_bool_contract::{
-    Candidate, ContractId, ContractSpec, FactView, FieldMatcher, MatchOp, Outcome, ProgramSpec,
-    Refusal, SequenceId, clause, contract, dimension, evaluate,
+    Candidate, ContractId, ContractSpec, FactView, FieldMatcher, FrameFacts, MatchOp, Outcome,
+    ProgramSpec, Refusal, SequenceId, clause, contract, dimension, evaluate,
 };
 use common::{ContextWord, FrameWord, StateWord, TokenWord};
 
@@ -31,9 +31,18 @@ fn s1_offset2(role: u32) -> Option<u128> {
     Some(u128::from(FrameWord::new(1, 2, 2, 0b10, 1, role, 1).raw()))
 }
 
+/// The placement S1 offset 2, carrying `word` as its frame word.
+fn s1_at_2(word: Option<u128>) -> FrameFacts {
+    FrameFacts {
+        sequence: SequenceId(0),
+        offset: 2,
+        word: word.unwrap_or(0),
+    }
+}
+
 fn outcome(spec: &ProgramSpec, name: &str, words: &[Option<u128>]) -> Outcome {
     let id = spec.contract_id(name).unwrap();
-    evaluate(id, &FactView::new(spec, words, 2, Some(SequenceId(0))))
+    evaluate(id, &FactView::new(spec, words, 2, Some(s1_at_2(words[1]))))
 }
 
 fn refused(
@@ -67,7 +76,7 @@ fn declare_function_name_is_a_candidate() {
         Outcome::Candidate(Candidate {
             contract: ContractId(2),
             position: 2,
-            frame: Some(SequenceId(0)),
+            frame: Some(s1_at_2(s1_offset2(1))),
         })
     );
 }

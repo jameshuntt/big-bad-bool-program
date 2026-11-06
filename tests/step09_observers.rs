@@ -113,7 +113,8 @@ fn bowl_packets_name_position_contract_and_changed_dimensions() {
     runtime.register(ObserverConfig::new("trace", WakeProfileCode::InlineQueue));
     let (_, _, mut bowl) = run(&program, common::ASYNC_FN_FOO, BowlObserver::new(runtime));
     let delivered = bowl.runtime_mut().drain_inline();
-    // Position 2: Observed, Framed, Candidate, Authorized, Committed, Emitted.
+    // Position 2: Observed, Framed, Candidate under AsyncFnHead and under
+    // FnHead (both kept since correction 4), Authorized, Committed, Emitted.
     let at_2: Vec<(u64, u64, u32, u32)> = delivered
         .iter()
         .filter(|e| e.payload.slot == 2)
@@ -132,10 +133,20 @@ fn bowl_packets_name_position_contract_and_changed_dimensions() {
             (1, 0, 2, u32::MAX),
             (2, 0, 2, u32::MAX),
             (3, 0, 2, 2),
+            (3, 0, 2, 2),
             (5, 0, 2, 2),
             (6, 1 << 3, 2, 2),
             (7, 1 << 4, 2, 2),
         ]
+    );
+    // Position 1 authorizes two contracts together; `len` says how many.
+    let authorized_1 = delivered
+        .iter()
+        .find(|e| e.payload.slot == 1 && e.key.phase() == 5)
+        .unwrap();
+    assert_eq!(
+        (authorized_1.payload.offset, authorized_1.payload.len),
+        (0, 2)
     );
     // Position 3 pushes `context` and writes `state`.
     let committed_3 = delivered

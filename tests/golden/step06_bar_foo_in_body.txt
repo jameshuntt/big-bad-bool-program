@@ -1,6 +1,6 @@
 # step results
 0: commit fn-head-begin effects []
-1: commit fn-keyword-after-modifier effects []
+1: commit fn-head-begin+fn-keyword-after-modifier effects []
 2: commit declare-function-name effects [effect {kind=DeclaresIdentity, class=Function} at 2]
 3: commit open-params effects []
 4: commit declare-parameter effects [effect {kind=DeclaresIdentity, class=Binding} at 4]
@@ -21,19 +21,22 @@ candidate fn-head-begin via AsyncFnHead
 authorized fn-head-begin
 committed state {phase=Items, marks=can_declare} -> {phase=FnHead, marks=can_declare}
 observed 1 {kind=KwFn}
-framed [AsyncFnHead@1]
+framed [AsyncFnHead@1, FnHead@0]
 candidate fn-keyword-after-modifier via AsyncFnHead
-authorized fn-keyword-after-modifier
+candidate fn-head-begin via FnHead
+authorized fn-head-begin+fn-keyword-after-modifier
 committed nothing
 observed 2 {kind=Ident}
-framed [AsyncFnHead@2]
+framed [AsyncFnHead@2, FnHead@1]
 candidate declare-function-name via AsyncFnHead
+candidate declare-function-name via FnHead
 authorized declare-function-name
 committed state {phase=FnHead, marks=can_declare} -> {phase=SignatureName, marks=can_declare}
 emitted effect {kind=DeclaresIdentity, class=Function} at 2
 observed 3 {kind=LParen}
-framed [AsyncFnHead@3 boundary, ParamBinding@0 boundary]
+framed [AsyncFnHead@3 boundary, FnHead@2 boundary, ParamBinding@0 boundary]
 candidate open-params via AsyncFnHead
+candidate open-params via FnHead
 candidate open-params via ParamBinding
 authorized open-params
 committed context [{scope=Module, expecting=Item, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=Pattern, marks=none}]; state {phase=SignatureName, marks=can_declare} -> {phase=Params, marks=can_declare}

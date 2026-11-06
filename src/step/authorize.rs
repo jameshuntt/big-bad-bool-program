@@ -8,7 +8,12 @@
 //!   them; equal values count once, different values are a `Conflict`;
 //! - every contract that pushes, pops or writes a stacked dimension must
 //!   carry the same stack ops on it; equal stack ops apply once;
-//! - effect writes merge the same way, one effect word per effect dimension.
+//! - effect writes merge the same way, one effect word per effect dimension;
+//! - contracts that read a frame field must agree on its declared value:
+//!   two frame interpretations whose sequences declare different values for
+//!   a field are both fine, until actualizing contracts read that field
+//!   under both. Then it is a `Conflict`. A field a sequence does not declare
+//!   constrains nothing, so a longer sequence may refine a shorter one.
 //!
 //! The merge reads contracts in name order and the plan is kept in
 //! dimension and field order, so the result does not depend on the order
@@ -18,8 +23,12 @@
 use big_bad_bool_interact::FieldValue;
 
 use crate::codes::Refusal;
-use crate::contract::Candidate;
-use crate::model::{ContractId, DimWrites, ProgramSpec, ResolvedContract, ResolvedStackOp};
+use crate::contract::{Candidate, FactView, Outcome, evaluate};
+use crate::frame::FrameFacts;
+use crate::model::{
+    ContractId, DimWrites, Observation, ProgramSpec, ResolvedContract, ResolvedStackOp, SequenceId,
+    render_value,
+};
 use crate::step::commit::ProjectionState;
 use crate::step::limits::{Limit, within};
 
@@ -62,11 +71,64 @@ impl AuthorizedTransition {
     }
 }
 
+/// What evaluation found at one position.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Gathered {
+    /// Every contract that held, once per frame interpretation it held under.
+    pub(crate) candidates: Vec<Candidate>,
+    /// One refusal per contract whose WHEN held but that is no candidate
+    /// under any interpretation, in contract name order.
+    pub(crate) refused: Vec<Refusal>,
+}
+
+/// Collects the applicable candidates of one position: every contract in
+/// `ids` under every frame interpretation in `frames`, or under no frame when
+/// there is none. Shared references only.
+pub(crate) fn gather(
+    spec: &ProgramSpec,
+    state: &ProjectionState,
+    ids: &[ContractId],
+    observation: &Observation,
+    frames: &[FrameFacts],
+) -> Gathered {
+    let position = observation.position();
+    let views: Vec<Option<&FrameFacts>> = if frames.is_empty() {
+        vec![None]
+    } else {
+        frames.iter().map(Some).collect()
+    };
+    let mut candidates = Vec::new();
+    let mut refused: Vec<(ContractId, Refusal)> = Vec::new();
+    for frame in views {
+        let words = state.fact_words(spec, observation, frame.map_or(0, |f| f.word));
+        let view = FactView::new(spec, &words, position, frame.copied());
+        for &id in ids {
+            match evaluate(id, &view) {
+                Outcome::NotApplicable => {}
+                Outcome::Candidate(c) => candidates.push(c),
+                Outcome::Refused(r) => {
+                    if !refused.iter().any(|(seen, _)| *seen == id) {
+                        refused.push((id, r));
+                    }
+                }
+            }
+        }
+    }
+    refused.retain(|(id, _)| !candidates.iter().any(|c| c.contract == *id));
+    // Name order, so the refusals do not depend on the order contracts were declared in.
+    refused.sort_by_key(|(id, _)| spec.resolved[usize::from(id.0)].name);
+    Gathered {
+        candidates,
+        refused: refused.into_iter().map(|(_, r)| r).collect(),
+    }
+}
+
 /// Picks the transition for one position.
 ///
 /// The candidate count is checked against `max_candidates` first, then the
-/// distinct contracts against `max_actualized`. Their writes are merged (see
-/// the module notes); a contradiction is a `Conflict`. Stack ops must stay
+/// distinct contracts against `max_actualized`. The frame facts they read
+/// must agree, and their writes are merged (see the module notes); a
+/// contradiction is a `Conflict`. Stack ops must stay
 /// within each dimension's depth. `refused` is how many contracts were
 /// refused here; it goes into `NoContract`.
 pub(crate) fn authorize(
@@ -100,6 +162,7 @@ pub(crate) fn authorize(
         .map(|id| &spec.resolved[usize::from(id.0)])
         .collect();
     by_name.sort_by_key(|c| c.name);
+    facts(spec, candidates, position)?;
     let plan = merge(spec, &by_name, position)?;
     bounds(spec, state, &plan, position)?;
     Ok(AuthorizedTransition {
@@ -116,6 +179,62 @@ fn conflict(position: u32, first: &'static str, second: &'static str, target: St
         second,
         target,
     }
+}
+
+/// Every frame field an actualizing candidate reads and its frame's sequence
+/// declares must have one declared value across all such candidates.
+fn facts(spec: &ProgramSpec, candidates: &[Candidate], position: u32) -> Result<(), Refusal> {
+    let Some(frame_dim) = spec.frame_dim() else {
+        return Ok(());
+    };
+    let sequences = spec.sequences();
+    let mut seen: Vec<(&'static str, u128, &'static str, SequenceId, u8)> = Vec::new();
+    for c in candidates {
+        let Some(frame) = c.frame else { continue };
+        let contract = &spec.resolved[usize::from(c.contract.0)];
+        let reads = contract.reads(frame_dim);
+        for v in sequences[usize::from(frame.sequence.0)].declared(usize::from(frame.offset)) {
+            if reads.contains(&v.field) {
+                seen.push((
+                    v.field,
+                    v.value,
+                    contract.name,
+                    frame.sequence,
+                    frame.offset,
+                ));
+            }
+        }
+    }
+    let dim = &spec.dims[frame_dim];
+    let name = |s: SequenceId| sequences[usize::from(s.0)].name;
+    for field in dim.schema().fields {
+        let mut on: Vec<_> = seen.iter().filter(|e| e.0 == field.name).collect();
+        on.sort_by_key(|e| (e.2, name(e.3), e.4));
+        let Some(first) = on.first() else { continue };
+        if let Some(other) = on.iter().find(|e| e.1 != first.1) {
+            let says = |e: &(&str, u128, &str, SequenceId, u8)| {
+                format!(
+                    "{}@{} says {}",
+                    name(e.3),
+                    e.4,
+                    render_value(dim.schema(), field, e.1)
+                )
+            };
+            return Err(conflict(
+                position,
+                first.2,
+                other.2,
+                format!(
+                    "{}.{}: {}, {}",
+                    dim.name(),
+                    field.name,
+                    says(first),
+                    says(other)
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Merges the writes of `contracts`, given in name order.
@@ -252,6 +371,7 @@ fn bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ProgramSpec;
     use crate::model::{ContractSpec, contract, pop, push, set};
     use crate::test_support::{SET_INLINE, SET_TIMER, WHEN_B, spec};
 
@@ -282,11 +402,10 @@ mod tests {
 
     fn candidates(ids: &[u16]) -> Vec<Candidate> {
         ids.iter()
-            .enumerate()
-            .map(|(frame, id)| Candidate {
+            .map(|id| Candidate {
                 contract: ContractId(*id),
                 position: 5,
-                frame: Some(crate::model::SequenceId(frame as u16)),
+                frame: None,
             })
             .collect()
     }
@@ -381,6 +500,115 @@ mod tests {
             authorize(&spec, &state, &candidates(&[3, 1]), 5, 0),
             Err(conflict("push-inner-too", "write-scope", "scope stack"))
         );
+    }
+
+    mod frames {
+        use super::*;
+        use crate::model::{
+            ItemMatch, OffsetFacts, RecognizerSpec, SequenceSpec, clause, sequence,
+        };
+        use crate::test_support::{RECOGNIZER, builder};
+        use big_bad_bool_interact::FieldMatcher;
+
+        const A: ItemMatch = ItemMatch::One(FieldMatcher::eq("kind", 0));
+        const B: ItemMatch = ItemMatch::One(FieldMatcher::eq("kind", 1));
+        const C: ItemMatch = ItemMatch::One(FieldMatcher::eq("kind", 2));
+        // At a `b` with `a` before and `c` after, all three hold together.
+        const BC: SequenceSpec = sequence("bc", &[B, C]).facts(&[OffsetFacts {
+            offset: 0,
+            values: &[FieldValue::new("role", 1)],
+        }]);
+        const AB: SequenceSpec = sequence("ab", &[A, B]).facts(&[OffsetFacts {
+            offset: 1,
+            values: &[FieldValue::new("role", 2)],
+        }]);
+        const B_ONLY: SequenceSpec = sequence("b-only", &[B]);
+
+        const READS_ONE: ContractSpec = contract("reads-one")
+            .when(&[
+                clause("item", FieldMatcher::eq("kind", 1)),
+                clause("frame", FieldMatcher::eq("role", 1)),
+            ])
+            .transition(&[SET_INLINE]);
+        const READS_TWO: ContractSpec = contract("reads-two")
+            .when(&[
+                clause("item", FieldMatcher::eq("kind", 1)),
+                clause("frame", FieldMatcher::eq("role", 2)),
+            ])
+            .emit(&[set("out", "kind", 1)]);
+        const READS_ANY: ContractSpec = contract("reads-any").when(&[
+            clause("item", FieldMatcher::eq("kind", 1)),
+            clause("frame", FieldMatcher::any("role")),
+        ]);
+        const IGNORES: ContractSpec = contract("ignores").when(WHEN_B);
+
+        fn framed() -> ProgramSpec {
+            [READS_ONE, READS_TWO, READS_ANY, IGNORES]
+                .iter()
+                .fold(
+                    builder().recognize(RecognizerSpec {
+                        sequences: &[BC, AB, B_ONLY],
+                        ..RECOGNIZER
+                    }),
+                    |b, c| b.contract(*c),
+                )
+                .build()
+                .unwrap()
+        }
+
+        fn via(contract: u16, sequence: u16, offset: u8) -> Candidate {
+            Candidate {
+                contract: ContractId(contract),
+                position: 5,
+                frame: Some(FrameFacts {
+                    sequence: SequenceId(sequence),
+                    offset,
+                    word: 0,
+                }),
+            }
+        }
+
+        #[test]
+        fn contracts_that_read_contradictory_facts_conflict() {
+            let spec = framed();
+            let state = ProjectionState::start(&spec);
+            // reads-one saw role 1 under bc, reads-two saw role 2 under ab.
+            assert_eq!(
+                authorize(&spec, &state, &[via(1, 1, 1), via(0, 0, 0)], 5, 0),
+                Err(conflict(
+                    "reads-one",
+                    "reads-two",
+                    "frame.role: bc@0 says 1, ab@1 says 2"
+                ))
+            );
+            // One contract reading role under both is a conflict with itself.
+            assert_eq!(
+                authorize(&spec, &state, &[via(2, 0, 0), via(2, 1, 1)], 5, 0),
+                Err(conflict(
+                    "reads-any",
+                    "reads-any",
+                    "frame.role: ab@1 says 2, bc@0 says 1"
+                ))
+            );
+        }
+
+        #[test]
+        fn facts_nobody_reads_or_nobody_declares_coexist() {
+            let spec = framed();
+            let state = ProjectionState::start(&spec);
+            // `ignores` reads no frame field: the two placements may disagree.
+            let t = authorize(
+                &spec,
+                &state,
+                &[via(3, 0, 0), via(3, 1, 1), via(0, 0, 0)],
+                5,
+                0,
+            )
+            .unwrap();
+            assert_eq!(t.contracts(), [ContractId(0), ContractId(3)]);
+            // b-only declares no role: it refines nothing and contradicts nothing.
+            assert!(authorize(&spec, &state, &[via(0, 0, 0), via(2, 2, 0)], 5, 0).is_ok());
+        }
     }
 
     #[test]

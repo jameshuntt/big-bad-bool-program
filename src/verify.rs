@@ -12,15 +12,14 @@ use big_bad_bool_interact::MatchOp;
 use stable_digest::StableDigest;
 
 use crate::codes::Finding;
-use crate::contract::{FactView, Outcome, evaluate};
 use crate::digest::{TRACE_FORMAT, TraceHeader, spec_digest};
-use crate::frame::Recognizer;
+use crate::frame::{FrameFacts, Recognizer};
 use crate::model::{
     ContractId, DimensionId, DimensionRole, DimensionSpec, Observation, ProgramSpec,
     ResolvedClause, ResolvedItem, ResolvedStackOp, field_value,
 };
 use crate::step::ProjectionState;
-use crate::step::authorize::authorize;
+use crate::step::authorize::{authorize, gather};
 use crate::step::commit::commit;
 
 /// Bounds on the verifier's searches.
@@ -123,6 +122,7 @@ pub struct VerifiedProgram {
     recognizer: Option<Recognizer>,
     index: ContractIndex,
     inputs: Vec<Observation>,
+    frame_sets: BTreeMap<u128, Vec<Vec<FrameFacts>>>,
     digest: StableDigest,
     report: VerificationReport,
 }
@@ -171,6 +171,17 @@ impl VerifiedProgram {
 
     pub(crate) const fn index(&self) -> &ContractIndex {
         &self.index
+    }
+
+    /// Every full set of frame interpretations `observation`'s item can have;
+    /// one empty set without a recognizer or an item word.
+    pub(crate) fn frame_sets(&self, observation: &Observation) -> &[Vec<FrameFacts>] {
+        const NONE: &[Vec<FrameFacts>] = &[Vec::new()];
+        self.spec
+            .item_dimension()
+            .and_then(|d| observation.word(d))
+            .and_then(|item| self.frame_sets.get(&item))
+            .map_or(NONE, Vec::as_slice)
     }
 }
 
@@ -329,8 +340,20 @@ pub fn verify(
         return too_many(report);
     };
     let index = ContractIndex::new(&spec);
-    if let Some(item_dim) = spec.item_dim() {
-        sequences(&spec, item_dim, &labelled[item_dim], &mut report.findings);
+    let mut frame_sets = BTreeMap::new();
+    if let (Some(item_dim), Some(recognizer)) = (spec.item_dim(), &recognizer) {
+        let items = &labelled[item_dim];
+        sequences(&spec, item_dim, items, &mut report.findings);
+        let mut choices = items.clone();
+        choices.extend(spec.end_word().filter(|w| !items.contains(w)));
+        for &item in items {
+            match recognizer.realizable(item, &choices, limits.max_witness_tries as usize) {
+                Some(sets) => {
+                    frame_sets.insert(item, sets);
+                }
+                None => return too_many(report),
+            }
+        }
     }
     let frames: Vec<u128> = std::iter::once(0)
         .chain(
@@ -345,9 +368,9 @@ pub fn verify(
     }
     report.states = search(
         &spec,
-        recognizer.as_ref(),
         &index,
         &inputs,
+        &frame_sets,
         limits,
         &mut report.findings,
     );
@@ -360,6 +383,7 @@ pub fn verify(
         recognizer,
         index,
         inputs,
+        frame_sets,
         digest,
         report,
     })
@@ -377,42 +401,70 @@ fn meet(
         .any(|w| a.matches(schema, *w) && b.matches(schema, *w))
 }
 
-/// Equal-length sequences that can match one window with different facts
-/// (error), and sequences that can match inside a longer one (info).
+/// Sequences that can match inside a longer one (info: both are kept), and
+/// pairs of sequence offsets that can hold one focal item together while
+/// declaring different values for one frame field (info: containment refuses
+/// only when actualizing contracts read that field under both).
 fn sequences(spec: &ProgramSpec, item_dim: usize, items: &[u128], found: &mut Vec<Finding>) {
     let schema = spec.dims[item_dim].schema();
     let seqs = spec.sequences();
     for (i, a) in seqs.iter().enumerate() {
         for (j, b) in seqs.iter().enumerate() {
-            if i == j || a.items.is_empty() || b.items.is_empty() {
+            if i == j || a.items.is_empty() || a.items.len() >= b.items.len() {
                 continue;
             }
-            if a.items.len() == b.items.len() {
-                let same_window = a
-                    .items
+            for at in 0..=b.items.len() - a.items.len() {
+                if a.items
                     .iter()
-                    .zip(&b.items)
-                    .all(|(x, y)| meet(x, y, schema, items));
-                if i < j && same_window && a.facts != b.facts {
-                    found.push(Finding::OverlappingSequences {
-                        first: a.name,
-                        second: b.name,
+                    .enumerate()
+                    .all(|(k, x)| meet(x, &b.items[at + k], schema, items))
+                {
+                    found.push(Finding::ContainedSequence {
+                        inner: a.name,
+                        outer: b.name,
+                        at,
                     });
                 }
-            } else if a.items.len() < b.items.len() {
-                for at in 0..=b.items.len() - a.items.len() {
-                    if a.items
-                        .iter()
-                        .enumerate()
-                        .all(|(k, x)| meet(x, &b.items[at + k], schema, items))
-                    {
-                        found.push(Finding::ContainedSequence {
-                            inner: a.name,
-                            outer: b.name,
-                            at,
-                        });
-                    }
-                }
+            }
+        }
+    }
+
+    let Some(frame_dim) = spec.frame_dim() else {
+        return;
+    };
+    let frame_fields = spec.dims[frame_dim].schema().fields;
+    let placements: Vec<(usize, usize)> = seqs
+        .iter()
+        .enumerate()
+        .flat_map(|(s, seq)| (0..seq.items.len()).map(move |o| (s, o)))
+        .collect();
+    for (n, &(sa, oa)) in placements.iter().enumerate() {
+        for &(sb, ob) in &placements[n + 1..] {
+            let (a, b) = (&seqs[sa], &seqs[sb]);
+            // Align both on the focal item: a's item k sits where b's item k - oa + ob does.
+            let together = (0..a.items.len()).all(|k| {
+                let kb = k as isize - oa as isize + ob as isize;
+                kb < 0
+                    || kb >= b.items.len() as isize
+                    || meet(&a.items[k], &b.items[kb as usize], schema, items)
+            });
+            if !together {
+                continue;
+            }
+            let (da, db) = (a.declared(oa), b.declared(ob));
+            let differs = frame_fields.iter().find(|f| {
+                let va = da.iter().find(|v| v.field == f.name);
+                let vb = db.iter().find(|v| v.field == f.name);
+                matches!((va, vb), (Some(x), Some(y)) if x.value != y.value)
+            });
+            if let Some(field) = differs {
+                found.push(Finding::OverlappingFacts {
+                    first: a.name,
+                    first_offset: oa,
+                    second: b.name,
+                    second_offset: ob,
+                    field: field.name,
+                });
             }
         }
     }
@@ -584,11 +636,11 @@ fn satisfiable(
     }
 }
 
-/// One input of the state search: an observation and the frame word it is seen under.
-struct Input {
-    observation: Observation,
-    frame: u128,
-    sequence: Option<(usize, usize)>,
+/// One input of the state search: an observation and one full set of frame
+/// interpretations its item can have.
+struct Input<'a> {
+    observation: &'a Observation,
+    frames: &'a [FrameFacts],
 }
 
 /// The evidence an observation holds, as `dimension={fields}` pairs.
@@ -605,6 +657,18 @@ fn render_evidence(spec: &ProgramSpec, observation: &Observation) -> String {
         "nothing".to_owned()
     } else {
         parts.join(" ")
+    }
+}
+
+/// Frame words joined by ` & `, or `none`.
+fn render_frames(frames: &[FrameFacts], dim: Option<&DimensionSpec>) -> String {
+    match dim {
+        Some(dim) if !frames.is_empty() => frames
+            .iter()
+            .map(|f| dim.describe(f.word))
+            .collect::<Vec<_>>()
+            .join(" & "),
+        _ => "none".to_owned(),
     }
 }
 
@@ -626,43 +690,37 @@ fn render_state(spec: &ProgramSpec, state: &ProjectionState) -> String {
 }
 
 /// Breadth-first search over committed states from the start state. Every
-/// input is an evidence observation seen with no frame, or, when it holds an
-/// item word, seen under a frame word whose focal offset accepts it. The
+/// input is an evidence observation with one full set of frame
+/// interpretations the recognizer can give its item (the empty set when it
+/// holds no item). Each input goes through what the stepper does: the
+/// interpretations limit, `gather`, `authorize` and `commit`. The
 /// successor of a state is what commit gives; the end item's successors are
 /// not followed. Returns the number of states visited.
 fn search(
     spec: &ProgramSpec,
-    recognizer: Option<&Recognizer>,
     index: &ContractIndex,
     observations: &[Observation],
+    frame_sets: &BTreeMap<u128, Vec<Vec<FrameFacts>>>,
     limits: VerifyLimits,
     found: &mut Vec<Finding>,
 ) -> usize {
     let item_dim = spec.item_dimension();
     let end_word = spec.end_word();
-    let mut inputs: Vec<Input> = observations
-        .iter()
-        .map(|o| Input {
-            observation: o.clone(),
-            frame: 0,
-            sequence: None,
-        })
-        .collect();
-    if let Some((recognizer, item_dim)) = recognizer.zip(item_dim) {
-        for f in recognizer.universe() {
-            for o in observations {
-                if !o
-                    .word(item_dim)
-                    .is_some_and(|item| recognizer.accepts(&f, item))
-                {
-                    continue;
-                }
-                inputs.push(Input {
-                    observation: o.clone(),
-                    frame: f.word,
-                    sequence: Some((usize::from(f.sequence.0), usize::from(f.offset))),
-                });
-            }
+    let no_frames: Vec<Vec<FrameFacts>> = vec![Vec::new()];
+    let permitted = usize::from(spec.containment.max_interpretations);
+    let mut inputs: Vec<Input<'_>> = Vec::new();
+    let mut ids: Vec<Vec<ContractId>> = Vec::new();
+    for o in observations {
+        let sets = item_dim
+            .and_then(|d| o.word(d))
+            .and_then(|item| frame_sets.get(&item))
+            .unwrap_or(&no_frames);
+        for frames in sets.iter().filter(|f| f.len() <= permitted) {
+            inputs.push(Input {
+                observation: o,
+                frames,
+            });
+            ids.push(index.lookup(o));
         }
     }
 
@@ -683,24 +741,8 @@ fn search(
 
     while let Some(state) = queue.pop_front() {
         let mut exit = false;
-        for input in &inputs {
-            let words = state.fact_words(spec, &input.observation, input.frame);
-            let view = FactView::new(
-                spec,
-                &words,
-                0,
-                input
-                    .sequence
-                    .map(|(s, _)| crate::model::SequenceId(s as u16)),
-            );
-            let candidates: Vec<_> = index
-                .lookup(&input.observation)
-                .into_iter()
-                .filter_map(|id| match evaluate(id, &view) {
-                    Outcome::Candidate(c) => Some(c),
-                    _ => None,
-                })
-                .collect();
+        for (input, ids) in inputs.iter().zip(&ids) {
+            let candidates = gather(spec, &state, ids, input.observation, input.frames).candidates;
             match authorize(spec, &state, &candidates, 0, 0) {
                 Err(crate::codes::Refusal::Conflict {
                     first,
@@ -718,11 +760,8 @@ fn search(
                             witness: format!(
                                 "{} evidence={} frame={}",
                                 render_state(spec, &state),
-                                render_evidence(spec, &input.observation),
-                                match (input.sequence, frame_describe) {
-                                    (Some(_), Some(frame)) => frame.describe(input.frame),
-                                    _ => "none".to_owned(),
-                                }
+                                render_evidence(spec, input.observation),
+                                render_frames(input.frames, frame_describe)
                             ),
                         });
                     }
@@ -733,11 +772,16 @@ fn search(
                     let mut next = state.clone();
                     if commit(spec, &mut next, transition).is_ok() {
                         exit = true;
-                        for c in actualized {
+                        for c in &actualized {
                             committed[usize::from(c.0)] = true;
                         }
-                        if let Some((s, o)) = input.sequence {
-                            used[s][o] = true;
+                        for c in candidates
+                            .iter()
+                            .filter(|c| actualized.contains(&c.contract))
+                        {
+                            if let Some(f) = c.frame {
+                                used[usize::from(f.sequence.0)][usize::from(f.offset)] = true;
+                            }
                         }
                         let end = item_dim.is_some_and(|d| input.observation.word(d) == end_word);
                         if !end && seen.insert(next.clone()) {

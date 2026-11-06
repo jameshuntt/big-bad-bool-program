@@ -298,23 +298,14 @@ pub enum Finding {
         /// The offset.
         offset: usize,
     },
-    /// Two sequences of one length that can match one window with different facts.
-    #[liaise(
-        code = 27,
-        msg = "sequences `{first}` and `{second}` can match one window",
-        evidence(first, second)
-    )]
-    OverlappingSequences {
-        /// The lower sequence.
-        first: &'static str,
-        /// The higher sequence.
-        second: &'static str,
-    },
-    /// A sequence that can match inside a longer one. Longest-match drops it there.
+    // Code 27 (`OverlappingSequences`: equal-length sequences on one window
+    // with different facts, an error) is retired. Every match is kept now;
+    // see `OverlappingFacts`, code 31, and `Conflict`, code 30.
+    /// A sequence that can match inside a longer one. Both matches are kept.
     #[liaise(
         code = 28,
         severity = "info",
-        msg = "sequence `{inner}` can match inside `{outer}` at offset {at}",
+        msg = "sequence `{inner}` can match inside `{outer}` at offset {at}; both are kept",
         evidence(inner, outer, at)
     )]
     ContainedSequence {
@@ -324,6 +315,28 @@ pub enum Finding {
         outer: &'static str,
         /// Offset of `inner` inside `outer`.
         at: usize,
+    },
+    /// Two sequence offsets that can hold one focal item together and
+    /// declare different values for one frame field. Both are kept;
+    /// containment refuses only when actualizing contracts read that field
+    /// under both, and the state search reports that as a `Conflict`.
+    #[liaise(
+        code = 31,
+        severity = "info",
+        msg = "`{first}`@{first_offset} and `{second}`@{second_offset} can frame one item with different `{field}`",
+        evidence(first, first_offset, second, second_offset, field)
+    )]
+    OverlappingFacts {
+        /// The sequence placement first in declaration order.
+        first: &'static str,
+        /// Its offset.
+        first_offset: usize,
+        /// The other sequence.
+        second: &'static str,
+        /// Its offset.
+        second_offset: usize,
+        /// The frame field both declare.
+        field: &'static str,
     },
     /// The reachable-state search hit its limit. Nothing past it was checked.
     #[liaise(

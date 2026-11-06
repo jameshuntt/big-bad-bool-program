@@ -4,22 +4,25 @@
 //! not applicable, refused (naming the clause that failed), or a candidate.
 
 use crate::codes::Refusal;
+use crate::frame::FrameFacts;
 use crate::model::{
-    ContractId, DimensionId, ProgramSpec, ResolvedClause, SequenceId, field_value, render_value,
+    ContractId, DimensionId, ProgramSpec, ResolvedClause, field_value, render_value,
 };
 use big_bad_bool_interact::MatchOp;
 
 /// The current word of every dimension at one input position. Read only.
 ///
-/// `words` holds one entry per dimension, by index: the item word, the frame
-/// word (zero when no sequence matched), each state word (the top entry for a
-/// stacked dimension), and `None` for an empty stack or an effect dimension.
+/// `words` holds one entry per dimension, by index: each observed evidence
+/// word (`None` when the observation does not hold it), the frame word (zero
+/// when no sequence matched), each state word (the top entry for a stacked
+/// dimension), and `None` for an empty stack or an effect dimension. `frame`
+/// is the sequence placement the frame word comes from.
 #[derive(Debug, Clone, Copy)]
 pub struct FactView<'a> {
     spec: &'a ProgramSpec,
     words: &'a [Option<u128>],
     position: u32,
-    frame: Option<SequenceId>,
+    frame: Option<FrameFacts>,
 }
 
 impl<'a> FactView<'a> {
@@ -33,7 +36,7 @@ impl<'a> FactView<'a> {
         spec: &'a ProgramSpec,
         words: &'a [Option<u128>],
         position: u32,
-        frame: Option<SequenceId>,
+        frame: Option<FrameFacts>,
     ) -> Self {
         assert_eq!(words.len(), spec.dims.len(), "one word per dimension");
         Self {
@@ -56,9 +59,9 @@ impl<'a> FactView<'a> {
         self.position
     }
 
-    /// The sequence whose frame word this view carries.
+    /// The sequence placement whose frame word this view carries.
     #[must_use]
-    pub const fn frame(&self) -> Option<SequenceId> {
+    pub const fn frame(&self) -> Option<FrameFacts> {
         self.frame
     }
 
@@ -112,7 +115,7 @@ pub struct Candidate {
     /// The input position.
     pub position: u32,
     /// The frame interpretation it held under.
-    pub frame: Option<SequenceId>,
+    pub frame: Option<FrameFacts>,
 }
 
 /// The result of evaluating one contract.

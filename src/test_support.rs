@@ -29,6 +29,9 @@ pub struct Frame {
     #[labels(boundary = 1)]
     #[flags(boundary = 0)]
     pub marks: u16,
+    /// A fact field sequences may declare.
+    #[bits(2)]
+    pub role: u16,
 }
 
 /// flaga_solver's `Job16`: `timer` requires `inline_queue`.

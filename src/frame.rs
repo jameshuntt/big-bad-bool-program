@@ -6,12 +6,20 @@
 //! sequence key, the offset, the [`Position`], the boundary flag, and the
 //! facts declared for that offset. Raw n-grams never become bits.
 //!
-//! A match whose window lies inside a longer match's window is dropped
-//! (longest-match). The boundary flag is set on every frame word of an item
-//! that ends one match and begins another. Items past the input are the end
-//! item; there is nothing before the first item.
+//! Every match is kept. A match whose window lies inside a longer match's
+//! window is not dropped: both are interpretations of the focal item, and
+//! the longer one may refine the shorter with more facts. Whether two
+//! interpretations agree is decided where it matters: containment refuses
+//! actualizing contracts that read one frame field and saw two different
+//! declared values for it (`step::authorize`), and the verifier lists every
+//! pair of sequence offsets that can hold one focal item with different
+//! declared values (`verify`). The boundary flag is set on every frame word
+//! of an item that ends one match and begins another. Items past the input
+//! are the end item; there is nothing before the first item.
 //!
 //! The recognizer sees no state and writes nothing but its own output.
+
+use std::collections::BTreeSet;
 
 use big_bad_bool_core::BitFieldSpec;
 use big_bad_bool_interact::FieldValue;
@@ -22,8 +30,8 @@ use crate::model::{
     DimensionSpec, Position, ProgramSpec, ResolvedSequence, SequenceId, field_value,
 };
 
-/// One frame interpretation of the focal item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One frame interpretation of the focal item: a sequence placement and its word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FrameFacts {
     /// The matched sequence.
     pub sequence: SequenceId,
@@ -45,21 +53,12 @@ pub struct Recognizer {
     end_word: u128,
 }
 
+/// One matched sequence placement around the focal item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Match {
     sequence: usize,
     offset: usize,
-    start: usize,
     len: usize,
-}
-
-impl Match {
-    const fn end(&self) -> usize {
-        self.start + self.len
-    }
-
-    const fn inside(&self, other: &Self) -> bool {
-        other.len > self.len && other.start <= self.start && other.end() >= self.end()
-    }
 }
 
 impl Recognizer {
@@ -177,20 +176,26 @@ impl Recognizer {
                     matches.push(Match {
                         sequence,
                         offset,
-                        start,
                         len,
                     });
                 }
             }
         }
-        let kept: Vec<&Match> = matches
-            .iter()
-            .filter(|m| !matches.iter().any(|other| m.inside(other)))
-            .collect();
-        let boundary = kept.iter().any(|a| {
-            a.offset + 1 == a.len && kept.iter().any(|b| b.offset == 0 && !std::ptr::eq(*a, *b))
+        self.frames(&matches)
+    }
+
+    /// The frame words of a full match set, in match order. The boundary
+    /// flag goes on every word when one match ends here and another begins.
+    fn frames(&self, matches: &[Match]) -> Vec<FrameFacts> {
+        let boundary = matches.iter().enumerate().any(|(i, a)| {
+            a.offset + 1 == a.len
+                && matches
+                    .iter()
+                    .enumerate()
+                    .any(|(j, b)| j != i && b.offset == 0)
         });
-        kept.iter()
+        matches
+            .iter()
             .map(|m| {
                 let word = self.words[m.sequence][m.offset];
                 FrameFacts {
@@ -204,6 +209,77 @@ impl Recognizer {
                 }
             })
             .collect()
+    }
+
+    /// Every full match set the focal item `focal` can have, over windows
+    /// whose other items are each one of `choices` or no item. Each set is
+    /// the exact set the recognizer gives for some window; sets are sorted.
+    /// `None` when more than `cap` partial sets arise at one window position.
+    pub(crate) fn realizable(
+        &self,
+        focal: u128,
+        choices: &[u128],
+        cap: usize,
+    ) -> Option<Vec<Vec<FrameFacts>>> {
+        let mut placements: Vec<Match> = Vec::new();
+        for (sequence, s) in self.sequences.iter().enumerate() {
+            for (offset, item) in s.items.iter().enumerate() {
+                if item.matches(&self.item_schema, focal) {
+                    placements.push(Match {
+                        sequence,
+                        offset,
+                        len: s.items.len(),
+                    });
+                }
+            }
+        }
+        let radius = self
+            .sequences
+            .iter()
+            .map(|s| s.items.len().saturating_sub(1))
+            .max()
+            .unwrap_or(0) as isize;
+        let mut alive: BTreeSet<Vec<bool>> = BTreeSet::from([vec![true; placements.len()]]);
+        for rel in (-radius..=radius).filter(|r| *r != 0) {
+            let mut next = BTreeSet::new();
+            for set in &alive {
+                for choice in choices.iter().copied().map(Some).chain([None]) {
+                    let kept = set
+                        .iter()
+                        .zip(&placements)
+                        .map(|(on, m)| {
+                            let k = m.offset as isize + rel;
+                            *on && (k < 0
+                                || k >= m.len as isize
+                                || choice.is_some_and(|w| {
+                                    self.sequences[m.sequence].items[k as usize]
+                                        .matches(&self.item_schema, w)
+                                }))
+                        })
+                        .collect();
+                    next.insert(kept);
+                }
+            }
+            if next.len() > cap {
+                return None;
+            }
+            alive = next;
+        }
+        let mut sets: Vec<Vec<FrameFacts>> = alive
+            .iter()
+            .map(|set| {
+                let matches: Vec<Match> = set
+                    .iter()
+                    .zip(&placements)
+                    .filter(|(on, _)| **on)
+                    .map(|(_, m)| *m)
+                    .collect();
+                self.frames(&matches)
+            })
+            .collect();
+        sets.sort();
+        sets.dedup();
+        Some(sets)
     }
 
     /// Every frame word the declared sequences can produce, with and without
@@ -222,11 +298,5 @@ impl Recognizer {
             }
         }
         all
-    }
-
-    /// Whether `item` can be the focal item of `frame`'s sequence offset.
-    pub(crate) fn accepts(&self, frame: &FrameFacts, item: u128) -> bool {
-        self.sequences[usize::from(frame.sequence.0)].items[usize::from(frame.offset)]
-            .matches(&self.item_schema, item)
     }
 }

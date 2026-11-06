@@ -91,7 +91,8 @@ fn async_fn_foo() {
         committed(spec, &results),
         pairs(&[
             (0, "fn-head-begin"),
-            (1, "fn-keyword-after-modifier"),
+            // FnHead begins at `fn` beside AsyncFnHead (correction 4); K1 and K2 agree (correction 3).
+            (1, "fn-head-begin+fn-keyword-after-modifier"),
             (2, "declare-function-name"),
             (3, "open-params"),
             (4, "declare-parameter"),
@@ -108,20 +109,23 @@ fn async_fn_foo() {
         events_at(&events, 2),
         [
             "observed 2 {kind=Ident}",
-            "framed [AsyncFnHead@2]",
+            "framed [AsyncFnHead@2, FnHead@1]",
             "candidate declare-function-name via AsyncFnHead",
+            "candidate declare-function-name via FnHead",
             "authorized declare-function-name",
             "committed state {phase=FnHead, marks=can_declare} -> {phase=SignatureName, marks=can_declare}",
             "emitted effect {kind=DeclaresIdentity, class=Function} at 2",
         ]
     );
-    // Position 3: two frames, one contract, counted once.
+    // Position 3: three frames, one contract, counted once.
     assert_eq!(
-        events_at(&events, 3)[1..4],
+        events_at(&events, 3)[1..6],
         [
-            "framed [AsyncFnHead@3 boundary, ParamBinding@0 boundary]",
+            "framed [AsyncFnHead@3 boundary, FnHead@2 boundary, ParamBinding@0 boundary]",
             "candidate open-params via AsyncFnHead",
+            "candidate open-params via FnHead",
             "candidate open-params via ParamBinding",
+            "authorized open-params",
         ]
     );
     golden("step06_async_fn_foo.txt", &text(spec, &results, &events));

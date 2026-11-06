@@ -605,6 +605,23 @@ impl ResolvedContract {
             .collect()
     }
 
+    /// The fields of `dim` any of the contract's clauses read, in clause order.
+    pub(crate) fn reads(&self, dim: usize) -> Vec<&'static str> {
+        let mut fields: Vec<&'static str> = Vec::new();
+        let all = self
+            .when
+            .iter()
+            .chain(&self.require)
+            .chain(self.require_any.iter().flatten())
+            .chain(&self.forbid);
+        for c in all.filter(|c| c.dim == dim) {
+            if !fields.contains(&c.field.name) {
+                fields.push(c.field.name);
+            }
+        }
+        fields
+    }
+
     /// True when the contract pushes, pops or writes fields of `dim`.
     pub(crate) fn touches_stack(&self, dim: usize) -> bool {
         !self.stack_on(dim).is_empty() || self.transition.iter().any(|w| w.dim == dim)
@@ -633,6 +650,18 @@ pub(crate) struct ResolvedSequence {
     pub(crate) name: &'static str,
     pub(crate) items: Vec<ResolvedItem>,
     pub(crate) facts: Vec<Vec<FieldValue>>,
+}
+
+impl ResolvedSequence {
+    /// The facts declared at `offset`, one value per field: the last one given.
+    pub(crate) fn declared(&self, offset: usize) -> Vec<FieldValue> {
+        let mut out: Vec<FieldValue> = Vec::new();
+        for v in &self.facts[offset] {
+            out.retain(|o| o.field != v.field);
+            out.push(*v);
+        }
+        out
+    }
 }
 
 /// The frame word fields the recognizer owns.

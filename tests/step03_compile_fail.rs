@@ -87,6 +87,52 @@ const CASES: &[Case] = &[
         "#,
         expected_stderr: "no method named `word_mut` found",
     },
+    Case {
+        name: "stepper_state_is_shared",
+        source: r#"
+            use big_bad_bool_contract::{NoObserver, ProjectionState, Stepper};
+            pub fn swap(stepper: &mut Stepper<'_, NoObserver>, other: ProjectionState) {
+                *stepper.state() = other;
+            }
+        "#,
+        expected_stderr: "cannot assign to data in a `&` reference",
+    },
+    Case {
+        name: "stepper_has_no_state_mut",
+        source: r#"
+            use big_bad_bool_contract::{NoObserver, Stepper};
+            pub fn reach(stepper: &mut Stepper<'_, NoObserver>) {
+                let _ = stepper.state_mut();
+            }
+        "#,
+        expected_stderr: "no method named `state_mut` found",
+    },
+    Case {
+        name: "observer_gets_shared_state",
+        source: r#"
+            use big_bad_bool_contract::{Observer, StepEvent};
+            pub struct Meddler;
+            impl Observer for Meddler {
+                fn observe(&mut self, event: &StepEvent<'_>) {
+                    if let StepEvent::Committed { after, .. } = event {
+                        let state: &mut big_bad_bool_contract::ProjectionState = after;
+                        let _ = state;
+                    }
+                }
+            }
+        "#,
+        expected_stderr: "types differ in mutability",
+    },
+    Case {
+        name: "build_verified_program",
+        source: r#"
+            use big_bad_bool_contract::{ProgramSpec, VerifiedProgram};
+            pub fn forge(spec: ProgramSpec) -> VerifiedProgram {
+                VerifiedProgram { spec }
+            }
+        "#,
+        expected_stderr: "cannot construct `VerifiedProgram` with struct literal syntax due to private fields",
+    },
 ];
 
 #[test]

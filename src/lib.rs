@@ -14,11 +14,14 @@
 //! <- `observe` <- `stepper`, and the `bowl` adapter on top.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod codes;
+mod contract;
 mod model;
 
 pub use codes::{Finding, Refusal};
+pub use contract::{Candidate, FactView, Outcome, evaluate};
 pub use model::{
     Clause, ContainmentSpec, ContractId, ContractSpec, DimensionId, DimensionRole, DimensionSpec,
     ItemMatch, MAX_SEQUENCE_LEN, Observation, OffsetFacts, Position, Program, ProgramBuilder,

@@ -579,3 +579,143 @@ pub const ASYNC_FN_FOO_CALLING_BAR: &[u128] = &[
 
 /// `bar(foo)` at module level.
 pub const BAR_FOO: &[u128] = &[IDENT, LPAREN, IDENT, RPAREN];
+
+// ---- rendering for golden files ----
+
+use big_bad_bool_contract::{
+    DimensionId, DimensionRole, FrameFacts, Observer, ProgramSpec, ProjectionState, StepEvent,
+    StepResult,
+};
+
+fn frames_text(spec: &ProgramSpec, frames: &[FrameFacts]) -> String {
+    let parts: Vec<String> = frames
+        .iter()
+        .map(|f| {
+            let boundary = if FrameWord::from_raw(f.word as u32).marks() & 1 == 1 {
+                " boundary"
+            } else {
+                ""
+            };
+            format!(
+                "{}@{}{boundary}",
+                spec.sequence(f.sequence).unwrap().name,
+                f.offset
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(", "))
+}
+
+fn state_changes(spec: &ProgramSpec, before: &ProjectionState, after: &ProjectionState) -> String {
+    let mut parts = Vec::new();
+    for (i, d) in spec.dimensions().iter().enumerate() {
+        let id = DimensionId(i as u16);
+        if d.role() != DimensionRole::State {
+            continue;
+        }
+        let show = |s: &ProjectionState| {
+            if d.stack_depth().is_some() {
+                let entries: Vec<String> = s.stack(id).iter().map(|w| d.describe(*w)).collect();
+                format!("[{}]", entries.join(", "))
+            } else {
+                d.describe(s.word(id))
+            }
+        };
+        let (b, a) = (show(before), show(after));
+        if b != a {
+            parts.push(format!("{} {b} -> {a}", d.name()));
+        }
+    }
+    if parts.is_empty() {
+        "nothing".to_owned()
+    } else {
+        parts.join("; ")
+    }
+}
+
+/// One line per event.
+pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
+    let token = spec.dimension(spec.item_dimension()).unwrap();
+    match event {
+        StepEvent::Observed(o) => format!("observed {} {}", o.position, token.describe(o.item)),
+        StepEvent::Framed(frames) => format!("framed {}", frames_text(spec, frames)),
+        StepEvent::Candidate(c) => format!(
+            "candidate {} via {}",
+            spec.contract(c.contract).unwrap().name,
+            c.frame
+                .map_or("no frame", |s| spec.sequence(s).unwrap().name)
+        ),
+        StepEvent::Refused(r) => format!("refused {r}"),
+        StepEvent::Authorized(id) => format!("authorized {}", spec.contract(*id).unwrap().name),
+        StepEvent::Committed { before, after } => {
+            format!("committed {}", state_changes(spec, before, after))
+        }
+        StepEvent::Emitted(e) => {
+            let d = spec.dimension(e.dimension).unwrap();
+            format!(
+                "emitted {} {} at {}",
+                d.name(),
+                d.describe(e.word),
+                e.position
+            )
+        }
+    }
+}
+
+/// One line per step result.
+pub fn render_result(spec: &ProgramSpec, r: &StepResult) -> String {
+    match r.committed {
+        Some(id) => {
+            let effects: Vec<String> = r
+                .effects
+                .iter()
+                .map(|e| {
+                    let d = spec.dimension(e.dimension).unwrap();
+                    format!("{} {} at {}", d.name(), d.describe(e.word), e.position)
+                })
+                .collect();
+            format!(
+                "{}: commit {} effects [{}]",
+                r.position,
+                spec.contract(id).unwrap().name,
+                effects.join(", ")
+            )
+        }
+        None => {
+            let refusals: Vec<String> = r.refusals.iter().map(ToString::to_string).collect();
+            format!("{}: refused [{}]", r.position, refusals.join("; "))
+        }
+    }
+}
+
+/// Records every event as a line.
+pub struct Recorder {
+    pub spec: ProgramSpec,
+    pub lines: Vec<String>,
+}
+
+impl Observer for Recorder {
+    fn observe(&mut self, event: &StepEvent<'_>) {
+        let line = render_event(&self.spec, event);
+        self.lines.push(line);
+    }
+}
+
+/// Compares `actual` with `tests/golden/<name>`. With `BLESS_GOLDEN` set, writes it instead.
+pub fn golden(name: &str, actual: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(name);
+    if std::env::var_os("BLESS_GOLDEN").is_some() {
+        std::fs::write(&path, actual).expect("write golden file");
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).expect("golden file exists");
+    assert_eq!(actual, expected, "golden file {name} differs");
+}
+
+/// Default limits for the section 16 program.
+pub const LIMITS: big_bad_bool_contract::VerifyLimits = big_bad_bool_contract::VerifyLimits {
+    max_states: 100_000,
+    max_witness_tries: 4_096,
+};

@@ -20,9 +20,12 @@ mod codes;
 mod contract;
 mod frame;
 mod model;
+mod observe;
 mod step;
+mod stepper;
 #[cfg(test)]
 mod test_support;
+mod verify;
 
 pub use codes::{Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
@@ -33,7 +36,10 @@ pub use model::{
     ProgramSpec, RecognizerSpec, RefusalRule, SequenceId, SequenceSpec, StackOp, Write, clause,
     contract, dimension, pop, push, sequence, set,
 };
+pub use observe::{NoObserver, Observer, StepEvent};
 pub use step::{AuthorizedTransition, Effect, ProjectionState};
+pub use stepper::{StepResult, Stepper};
+pub use verify::{VerificationReport, VerifiedProgram, VerifyLimits, verify};
 
 pub use big_bad_bool_interact::{FieldMatcher, FieldValue, MatchOp};
 pub use flaga_solver::Schema;

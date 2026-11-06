@@ -1,0 +1,297 @@
+//! The stepper: a verified program, a stream of observations, one commit per position.
+//!
+//! The focal item at index `i` is stepped once item `i + R` has arrived (R is
+//! the window radius). `finish` pads with the end item, steps every remaining
+//! item, then steps the end item itself at the position after the last
+//! observation. Per position: frame, evaluate every contract under every
+//! interpretation, authorize, commit. Observers see each stage.
+
+use std::collections::VecDeque;
+
+use crate::codes::Refusal;
+use crate::contract::{FactView, Outcome, evaluate};
+use crate::frame::FrameFacts;
+use crate::model::{ContractId, Observation, RefusalRule};
+use crate::observe::{Observer, StepEvent};
+use crate::step::authorize::authorize;
+use crate::step::commit::commit;
+use crate::step::limits::{Limit, within};
+use crate::step::{Effect, ProjectionState};
+use crate::verify::VerifiedProgram;
+
+/// What happened at one position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepResult {
+    /// The input position.
+    pub position: u32,
+    /// The contract committed, if any.
+    pub committed: Option<ContractId>,
+    /// The effects it emitted.
+    pub effects: Vec<Effect>,
+    /// When nothing committed: the contract refusals (for `NoContract` only)
+    /// and then the containment or commit refusal.
+    pub refusals: Vec<Refusal>,
+}
+
+/// Steps one input stream against one verified program.
+#[derive(Debug)]
+pub struct Stepper<'p, O: Observer> {
+    program: &'p VerifiedProgram,
+    state: ProjectionState,
+    buffer: VecDeque<Observation>,
+    base: usize,
+    received: usize,
+    next: usize,
+    end_position: u32,
+    halted: bool,
+    finished: bool,
+    observer: O,
+}
+
+impl<'p, O: Observer> Stepper<'p, O> {
+    /// A stepper at the program's start state.
+    pub fn new(program: &'p VerifiedProgram, observer: O) -> Self {
+        Self {
+            program,
+            state: ProjectionState::start(program.spec()),
+            buffer: VecDeque::new(),
+            base: 0,
+            received: 0,
+            next: 0,
+            end_position: 0,
+            halted: false,
+            finished: false,
+            observer,
+        }
+    }
+
+    /// Adds one observation and steps every position it completes the window for.
+    /// After a `Stop` refusal or after `finish`, nothing more is stepped.
+    pub fn push(&mut self, observation: Observation) -> Vec<StepResult> {
+        if self.halted || self.finished {
+            return Vec::new();
+        }
+        self.end_position = observation.position.saturating_add(1);
+        self.buffer.push_back(observation);
+        self.received += 1;
+        let radius = self.program.spec().window_radius();
+        let mut results = Vec::new();
+        while !self.halted && self.next + radius < self.received {
+            results.push(self.step(false));
+        }
+        results
+    }
+
+    /// Steps every remaining position, then the end item.
+    pub fn finish(&mut self) -> Vec<StepResult> {
+        if self.finished {
+            return Vec::new();
+        }
+        let mut results = Vec::new();
+        while !self.halted && self.next <= self.received {
+            results.push(self.step(true));
+        }
+        self.finished = true;
+        results
+    }
+
+    /// The committed state.
+    #[must_use]
+    pub const fn state(&self) -> &ProjectionState {
+        &self.state
+    }
+
+    /// The observer.
+    #[must_use]
+    pub const fn observer(&self) -> &O {
+        &self.observer
+    }
+
+    /// The observer, ending the stepper.
+    pub fn into_observer(self) -> O {
+        self.observer
+    }
+
+    /// True after a `Stop` refusal.
+    #[must_use]
+    pub const fn is_halted(&self) -> bool {
+        self.halted
+    }
+
+    /// The item words some contract would accept and containment would
+    /// authorize at the next focal position, from the current state, over
+    /// every frame interpretation the recognizer can produce for that item.
+    /// Read only: prediction may rank this set, never add to it.
+    #[must_use]
+    pub fn legal_next(&self) -> Vec<u128> {
+        let program = self.program;
+        let spec = program.spec();
+        let frames = program.recognizer().universe();
+        let next = u32::try_from(self.next).unwrap_or(u32::MAX);
+        program
+            .item_words()
+            .iter()
+            .copied()
+            .filter(|&item| {
+                let mut views = std::iter::once(None).chain(
+                    frames
+                        .iter()
+                        .filter(|f| program.recognizer().accepts(f, item))
+                        .map(Some),
+                );
+                views.any(|frame: Option<&FrameFacts>| {
+                    let words = self
+                        .state
+                        .fact_words(spec, item, frame.map_or(0, |f| f.word));
+                    let view = FactView::new(spec, &words, next, frame.map(|f| f.sequence));
+                    let candidates: Vec<_> = program
+                        .index()
+                        .lookup(item)
+                        .into_iter()
+                        .filter_map(|id| match evaluate(id, &view) {
+                            Outcome::Candidate(c) => Some(c),
+                            _ => None,
+                        })
+                        .collect();
+                    authorize(spec, &self.state, &candidates, next, 0).is_ok()
+                })
+            })
+            .collect()
+    }
+
+    fn item_at(&self, index: usize, finishing: bool) -> Option<u128> {
+        if index < self.base {
+            None
+        } else if index < self.received {
+            self.buffer.get(index - self.base).map(|o| o.item)
+        } else if finishing {
+            Some(self.program.spec().end_word())
+        } else {
+            None
+        }
+    }
+
+    fn step(&mut self, finishing: bool) -> StepResult {
+        let program = self.program;
+        let spec = program.spec();
+        let index = self.next;
+        let observation = if index < self.received {
+            self.buffer[index - self.base]
+        } else {
+            Observation {
+                position: self.end_position,
+                item: spec.end_word(),
+            }
+        };
+        let position = observation.position;
+        self.observer.observe(&StepEvent::Observed(&observation));
+
+        let frames = program
+            .recognizer()
+            .recognize_with(index, |i| self.item_at(i, finishing));
+        self.observer.observe(&StepEvent::Framed(&frames));
+
+        let result = match within(
+            Limit::Interpretations,
+            frames.len(),
+            spec.containment().max_interpretations,
+            position,
+        ) {
+            Err(refusal) => self.refuse(position, vec![refusal]),
+            Ok(()) => self.decide(&observation, &frames),
+        };
+
+        self.next += 1;
+        let radius = spec.window_radius();
+        while self.base + radius < self.next && !self.buffer.is_empty() {
+            self.buffer.pop_front();
+            self.base += 1;
+        }
+        result
+    }
+
+    fn decide(&mut self, observation: &Observation, frames: &[FrameFacts]) -> StepResult {
+        let program = self.program;
+        let spec = program.spec();
+        let position = observation.position;
+        let views: Vec<Option<&FrameFacts>> = if frames.is_empty() {
+            vec![None]
+        } else {
+            frames.iter().map(Some).collect()
+        };
+        let ids = program.index().lookup(observation.item);
+        let mut candidates = Vec::new();
+        let mut refused: Vec<(ContractId, Refusal)> = Vec::new();
+        for frame in views {
+            let words = self
+                .state
+                .fact_words(spec, observation.item, frame.map_or(0, |f| f.word));
+            let view = FactView::new(spec, &words, position, frame.map(|f| f.sequence));
+            for &id in &ids {
+                match evaluate(id, &view) {
+                    Outcome::NotApplicable => {}
+                    Outcome::Candidate(c) => {
+                        self.observer.observe(&StepEvent::Candidate(&c));
+                        candidates.push(c);
+                    }
+                    Outcome::Refused(r) => {
+                        if !refused.iter().any(|(seen, _)| *seen == id) {
+                            refused.push((id, r));
+                        }
+                    }
+                }
+            }
+        }
+        refused.retain(|(id, _)| !candidates.iter().any(|c| c.contract == *id));
+
+        match authorize(spec, &self.state, &candidates, position, refused.len()) {
+            Err(refusal) => {
+                let mut all: Vec<Refusal> = if matches!(refusal, Refusal::NoContract { .. }) {
+                    refused.into_iter().map(|(_, r)| r).collect()
+                } else {
+                    Vec::new()
+                };
+                all.push(refusal);
+                self.refuse(position, all)
+            }
+            Ok(transition) => {
+                let contract = transition.contract();
+                self.observer.observe(&StepEvent::Authorized(contract));
+                let before = self.state.clone();
+                match commit(spec, &mut self.state, transition) {
+                    Err(refusal) => self.refuse(position, vec![refusal]),
+                    Ok(effects) => {
+                        self.observer.observe(&StepEvent::Committed {
+                            before: &before,
+                            after: &self.state,
+                        });
+                        for effect in &effects {
+                            self.observer.observe(&StepEvent::Emitted(effect));
+                        }
+                        StepResult {
+                            position,
+                            committed: Some(contract),
+                            effects,
+                            refusals: Vec::new(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn refuse(&mut self, position: u32, refusals: Vec<Refusal>) -> StepResult {
+        for refusal in &refusals {
+            self.observer.observe(&StepEvent::Refused(refusal));
+        }
+        if self.program.spec().containment().on_refusal == RefusalRule::Stop {
+            self.halted = true;
+        }
+        StepResult {
+            position,
+            committed: None,
+            effects: Vec::new(),
+            refusals,
+        }
+    }
+}

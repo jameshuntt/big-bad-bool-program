@@ -1,0 +1,7 @@
+# step results
+0: refused [[BBBC0102] `callee-reference` refused at position 0: require_any needs context.expecting in {Statement, Expr}, observed Item; [BBBC0101] no contract accepts position 0 (1 refused)]
+# observer events
+observed 0 {kind=Ident}
+framed [CallWithArg@0]
+refused [BBBC0102] `callee-reference` refused at position 0: require_any needs context.expecting in {Statement, Expr}, observed Item
+refused [BBBC0101] no contract accepts position 0 (1 refused)

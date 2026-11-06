@@ -1,0 +1,27 @@
+# step results
+0: refused [[BBBC0102] `callee-reference` refused at position 0: require_any needs context.expecting in {Statement, Expr}, observed Item; [BBBC0101] no contract accepts position 0 (1 refused)]
+1: refused [[BBBC0102] `open-call-args` refused at position 1: require needs context.expecting = AfterExpr, observed Item; [BBBC0101] no contract accepts position 1 (1 refused)]
+2: refused [[BBBC0102] `argument-reference` refused at position 2: require needs context.scope = CallArgs, observed Module; [BBBC0101] no contract accepts position 2 (1 refused)]
+3: refused [[BBBC0101] no contract accepts position 3 (0 refused)]
+4: commit end effects []
+# observer events
+observed 0 {kind=Ident}
+framed [CallWithArg@0]
+refused [BBBC0102] `callee-reference` refused at position 0: require_any needs context.expecting in {Statement, Expr}, observed Item
+refused [BBBC0101] no contract accepts position 0 (1 refused)
+observed 1 {kind=LParen}
+framed [CallWithArg@1]
+refused [BBBC0102] `open-call-args` refused at position 1: require needs context.expecting = AfterExpr, observed Item
+refused [BBBC0101] no contract accepts position 1 (1 refused)
+observed 2 {kind=Ident}
+framed [CallWithArg@2]
+refused [BBBC0102] `argument-reference` refused at position 2: require needs context.scope = CallArgs, observed Module
+refused [BBBC0101] no contract accepts position 2 (1 refused)
+observed 3 {kind=RParen}
+framed [CallWithArg@3]
+refused [BBBC0101] no contract accepts position 3 (0 refused)
+observed 4 {kind=End}
+framed []
+candidate end via no frame
+authorized end
+committed nothing

@@ -1,0 +1,101 @@
+# step results
+0: commit fn-head-begin effects []
+1: commit fn-keyword-after-modifier effects []
+2: commit declare-function-name effects [effect {kind=DeclaresIdentity, class=Function} at 2]
+3: commit open-params effects []
+4: commit declare-parameter effects [effect {kind=DeclaresIdentity, class=Binding} at 4]
+5: commit param-colon effects []
+6: commit type-reference effects [effect {kind=ReferencesIdentity, class=Type} at 6]
+7: commit close-params effects []
+8: commit open-fn-body effects [effect {kind=OpensScope, class=None} at 8]
+9: commit callee-reference effects [effect {kind=ReferencesIdentity, class=Value} at 9]
+10: commit open-call-args effects []
+11: commit argument-reference effects [effect {kind=ReferencesIdentity, class=Value} at 11]
+12: commit close-call effects []
+13: commit close-fn-body effects [effect {kind=ClosesScope, class=None} at 13]
+14: commit end effects []
+# observer events
+observed 0 {kind=KwAsync}
+framed [AsyncFnHead@0]
+candidate fn-head-begin via AsyncFnHead
+authorized fn-head-begin
+committed state {phase=Items, marks=can_declare} -> {phase=FnHead, marks=can_declare}
+observed 1 {kind=KwFn}
+framed [AsyncFnHead@1]
+candidate fn-keyword-after-modifier via AsyncFnHead
+authorized fn-keyword-after-modifier
+committed nothing
+observed 2 {kind=Ident}
+framed [AsyncFnHead@2]
+candidate declare-function-name via AsyncFnHead
+authorized declare-function-name
+committed state {phase=FnHead, marks=can_declare} -> {phase=SignatureName, marks=can_declare}
+emitted effect {kind=DeclaresIdentity, class=Function} at 2
+observed 3 {kind=LParen}
+framed [AsyncFnHead@3 boundary, ParamBinding@0 boundary]
+candidate open-params via AsyncFnHead
+candidate open-params via ParamBinding
+authorized open-params
+committed context [{scope=Module, expecting=Item, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=Pattern, marks=none}]; state {phase=SignatureName, marks=can_declare} -> {phase=Params, marks=can_declare}
+observed 4 {kind=Ident}
+framed [ParamBinding@1]
+candidate declare-parameter via ParamBinding
+authorized declare-parameter
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=Pattern, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=AfterPattern, marks=none}]
+emitted effect {kind=DeclaresIdentity, class=Binding} at 4
+observed 5 {kind=Colon}
+framed [ParamBinding@2 boundary, TypeAfterColon@0 boundary]
+candidate param-colon via ParamBinding
+candidate param-colon via TypeAfterColon
+authorized param-colon
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=AfterPattern, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=Type, marks=none}]
+observed 6 {kind=Ident}
+framed [TypeAfterColon@1]
+candidate type-reference via TypeAfterColon
+authorized type-reference
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=Type, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=AfterType, marks=none}]
+emitted effect {kind=ReferencesIdentity, class=Type} at 6
+observed 7 {kind=RParen}
+framed []
+candidate close-params via no frame
+authorized close-params
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnParams, expecting=AfterType, marks=none}] -> [{scope=Module, expecting=Item, marks=none}]; state {phase=Params, marks=can_declare} -> {phase=SignatureEnd, marks=can_declare}
+observed 8 {kind=LBrace}
+framed []
+candidate open-fn-body via no frame
+authorized open-fn-body
+committed context [{scope=Module, expecting=Item, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=Statement, marks=none}]; state {phase=SignatureEnd, marks=can_declare} -> {phase=Body, marks=can_declare}
+emitted effect {kind=OpensScope, class=None} at 8
+observed 9 {kind=Ident}
+framed [CallWithArg@0]
+candidate callee-reference via CallWithArg
+authorized callee-reference
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=Statement, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}]
+emitted effect {kind=ReferencesIdentity, class=Value} at 9
+observed 10 {kind=LParen}
+framed [CallWithArg@1]
+candidate open-call-args via CallWithArg
+authorized open-call-args
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}, {scope=CallArgs, expecting=Expr, marks=none}]
+observed 11 {kind=Ident}
+framed [CallWithArg@2]
+candidate argument-reference via CallWithArg
+authorized argument-reference
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}, {scope=CallArgs, expecting=Expr, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}, {scope=CallArgs, expecting=AfterExpr, marks=none}]
+emitted effect {kind=ReferencesIdentity, class=Value} at 11
+observed 12 {kind=RParen}
+framed [CallWithArg@3]
+candidate close-call via CallWithArg
+authorized close-call
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}, {scope=CallArgs, expecting=AfterExpr, marks=none}] -> [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}]
+observed 13 {kind=RBrace}
+framed []
+candidate close-fn-body via no frame
+authorized close-fn-body
+committed context [{scope=Module, expecting=Item, marks=none}, {scope=FnBody, expecting=AfterExpr, marks=none}] -> [{scope=Module, expecting=Item, marks=none}]; state {phase=Body, marks=can_declare} -> {phase=Items, marks=can_declare}
+emitted effect {kind=ClosesScope, class=None} at 13
+observed 14 {kind=End}
+framed []
+candidate end via no frame
+authorized end
+committed nothing

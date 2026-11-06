@@ -7,6 +7,7 @@
 
 pub(crate) mod authorize;
 pub(crate) mod commit;
+pub(crate) mod limits;
 
 pub use authorize::AuthorizedTransition;
 pub use commit::{Effect, ProjectionState};

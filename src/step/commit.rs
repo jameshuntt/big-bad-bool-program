@@ -51,6 +51,12 @@ impl ProjectionState {
         self.stacks[i].last().copied().unwrap_or(self.words[i])
     }
 
+    /// True when `dimension` is a dimension of this state.
+    #[must_use]
+    pub fn has(&self, dimension: DimensionId) -> bool {
+        usize::from(dimension.0) < self.words.len()
+    }
+
     /// The top entry of a stacked dimension.
     #[must_use]
     pub fn top(&self, dimension: DimensionId) -> Option<u128> {

@@ -16,6 +16,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "bowl")]
+mod bowl;
 mod codes;
 mod contract;
 mod digest;
@@ -28,6 +30,8 @@ mod stepper;
 mod test_support;
 mod verify;
 
+#[cfg(feature = "bowl")]
+pub use bowl::{BowlObserver, EventKind};
 pub use codes::{Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
 pub use digest::{SPEC_FORMAT, TRACE_FORMAT, TraceHeader, spec_digest, spec_material};
@@ -38,6 +42,9 @@ pub use model::{
     ProgramSpec, RecognizerSpec, RefusalRule, SequenceId, SequenceSpec, StackOp, Write, clause,
     contract, dimension, pop, push, sequence, set,
 };
+/// The ob-serve-a-bowl crate the adapter publishes to.
+#[cfg(feature = "bowl")]
+pub use ob_serve_a_bowl;
 pub use observe::{NoObserver, Observer, StepEvent};
 pub use step::{AuthorizedTransition, Effect, ProjectionState};
 pub use stepper::{StepResult, Stepper};

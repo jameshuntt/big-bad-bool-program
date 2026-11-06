@@ -327,9 +327,9 @@ fn the_verifier_reads_every_evidence_dimension() {
     assert_eq!(program.inputs().len(), 5 * 3 * 3);
     assert!(program.report().passed(), "{:?}", program.report().findings);
 
-    // legal_next draws from every evidence dimension, not only the item.
+    // The representatives draw from every evidence dimension, not only the item.
     let stepper = Stepper::new(&program, big_bad_bool_contract::NoObserver);
-    let next = stepper.legal_next();
+    let next = stepper.legal_next_representatives();
     assert!(next.contains(&observe(
         0,
         &[(BADGE, STAFF), (CLOCK, NIGHT), (DOOR, CLOSED)]

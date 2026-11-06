@@ -237,7 +237,7 @@ fn a_position_is_stepped_once_its_window_is_full() {
 }
 
 #[test]
-fn legal_next_is_read_only_and_follows_state() {
+fn legal_next_representatives_are_read_only_and_follow_state() {
     let program = verified(common::CONTAINMENT);
     let mut stepper = Stepper::new(&program, NoObserver);
     let kinds = |next: Vec<Observation>| -> Vec<u128> {
@@ -247,11 +247,11 @@ fn legal_next_is_read_only_and_follows_state() {
     };
     // The end item is not pushed: only finish steps it.
     assert_eq!(
-        kinds(stepper.legal_next()),
+        kinds(stepper.legal_next_representatives()),
         [common::KW_ASYNC, common::KW_FN]
     );
     let before = stepper.state().clone();
-    let _ = stepper.legal_next();
+    let _ = stepper.legal_next_representatives();
     assert_eq!(stepper.state(), &before);
     for o in common::tokens(
         0,
@@ -266,7 +266,7 @@ fn legal_next_is_read_only_and_follows_state() {
     }
     // After `async`: phase FnHead.
     assert_eq!(
-        kinds(stepper.legal_next()),
+        kinds(stepper.legal_next_representatives()),
         [common::KW_ASYNC, common::KW_FN, common::IDENT]
     );
 }

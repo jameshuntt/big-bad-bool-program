@@ -228,7 +228,7 @@ fn a_contract_only_program_builds_verifies_and_steps() {
     // No end item: finish has nothing left to step.
     assert!(stepper.finish().is_empty());
     // From heater Off: Mild or End with any mode (6), Manual with no, Cold or Hot reading (3), Cold and Auto (1).
-    assert_eq!(stepper.legal_next().len(), 10);
+    assert_eq!(stepper.legal_next_representatives().len(), 10);
 }
 
 #[test]

@@ -135,15 +135,24 @@ impl<'p, O: Observer> Stepper<'p, O> {
         self.halted
     }
 
-    /// The observations some contract would accept and containment would
-    /// authorize at the next focal position, from the current state, under
-    /// some full set of frame interpretations the recognizer can give the
-    /// item. Each is one of [`VerifiedProgram::inputs`], at the next position.
+    /// One representative observation for each class of observations some
+    /// contract would accept and containment would authorize at the next
+    /// focal position, from the current state, under some full set of frame
+    /// interpretations the recognizer can give the item. Each is one of
+    /// [`VerifiedProgram::inputs`], at the next position.
+    ///
+    /// These are representatives, not every legal observation. Two words of
+    /// an evidence dimension are in one class when every matcher of the
+    /// program (contract clauses, item matchers, the end item) and every
+    /// legality rule of its schema gives them the same answer; labelled
+    /// words are listed as themselves. Any other observation whose words are
+    /// in the same classes as a listed one is accepted in the same way at run
+    /// time: the contracts constrain classes, not these raw words.
+    ///
     /// The end item is never among them: `push` refuses it, only `finish`
-    /// steps it.
-    /// Read only: prediction may rank this set, never add to it.
+    /// steps it. Read only.
     #[must_use]
-    pub fn legal_next(&self) -> Vec<Observation> {
+    pub fn legal_next_representatives(&self) -> Vec<Observation> {
         let program = self.program;
         let spec = program.spec();
         let next = u32::try_from(self.next).unwrap_or(u32::MAX);

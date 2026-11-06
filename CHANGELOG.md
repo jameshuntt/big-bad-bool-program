@@ -222,6 +222,32 @@ stepper committed every one of them.
   which compare the witness with brute force over every legal word for 4,000
   random positive and FORBID clause sets.
 
+### 8. `legal_next` names what it returns
+
+Why: `Stepper::legal_next` returned one observation per class of accepted
+observations (labelled words as themselves), drawn from
+`VerifiedProgram::inputs`. Its name and its doc ("prediction may rank this
+set, never add to it") read as every concrete word the stepper would accept.
+A reading in 6..=11 is one class with one listed word, 6; 7 to 11 are
+accepted just the same.
+
+- `Stepper::legal_next` is renamed `legal_next_representatives`. Same
+  computation, same result. Its doc and `VerifiedProgram::inputs`'s say these
+  are class representatives: any other word in the same class as a listed
+  one is accepted the same way at run time, and the contracts constrain
+  classes, not the listed raw words.
+- README and module docs say the same. No prediction or enumeration is added.
+- Behaviour change: the method name only. Tests updated:
+  `tests/step06_stepper.rs` (`legal_next_representatives_are_read_only_and_follow_state`),
+  `tests/correction1_contract_only.rs`, `tests/correction2_evidence.rs`,
+  `tests/correction5_evidence_domain.rs`, `tests/correction6_end_word.rs`.
+- Proof: `tests/correction8_representatives.rs`:
+  `representatives_are_one_word_per_accepted_class` (the dial lists 0 and 6
+  only) and `other_members_of_an_accepted_class_are_accepted_the_same_way`
+  (7 to 11 are unlisted and commit `band` like 6; over all 16 dial words the
+  accepted outcomes are exactly the representatives' outcomes; words of an
+  unlisted class are refused).
+
 ## 0.1.0 (unreleased, not published)
 
 First build of the approved architecture report (sections 9 to 24), steps 1 to 11

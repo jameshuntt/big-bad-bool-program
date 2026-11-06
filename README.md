@@ -52,7 +52,7 @@ Modules are future crate boundaries. Each depends only on the ones before it.
 | `digest` | Stable spec material, its digest, the trace header |
 | `verify` | `verify`: fixed-word legality, contained sequences and overlapping facts, unsatisfiable contracts, and a bounded search of reachable states for conflicts, states with no exit, dead contracts, impossible effects, dead sequences and unreachable labels. The search runs every input through the stepper's own `gather`, `authorize` and `commit`. The only place a `VerifiedProgram` is built |
 | `observe` | `StepEvent`, `Observer`, `NoObserver` |
-| `stepper` | `Stepper`, `StepResult`, `legal_next` |
+| `stepper` | `Stepper`, `StepResult`, `legal_next_representatives` |
 | `bowl` (feature) | `BowlObserver`: publishes each event to an `ObservableWakeRuntime`, drops the report |
 
 ## Assembly
@@ -181,6 +181,13 @@ Rules worth knowing:
   labelled word. A legal word with no label therefore gives the same matcher
   answers as some domain word, and a verified program never refuses with
   `Conflict` at run time.
+- `Stepper::legal_next_representatives` lists one representative observation
+  for each class the program accepts next (with labelled words as
+  themselves), drawn from `VerifiedProgram::inputs`. It is not every legal
+  observation: any other word in the same class as a listed one (same
+  matcher answers, same legality) is accepted the same way at run time. The
+  contracts constrain classes, not the listed raw words. The end item is never
+  listed.
 - `Unsatisfiable` on a state dimension is decided over the same classes, split
   by the contract's clauses on that dimension (positive and FORBID) and the
   dimension's legality rules, every field included. Some legal state word
@@ -205,9 +212,10 @@ BLESS_GOLDEN=1 cargo test       # rewrites tests/golden/*; review the diff befor
 | `tests/correction2_evidence.rs` | Three independent evidence dimensions in one contract; absent evidence reads as nothing; observations hold only observed evidence; the verifier reads every evidence dimension |
 | `tests/correction3_actualization.rs` | Contracts writing different dimensions and emitting independent effects actualize together; identical writes count once; conflicting writes are refused; results do not depend on declaration order; the fan-out limit |
 | `tests/correction4_overlap.rs` | Contained and overlapping matches coexist; left and right context still decide; contradictory facts are listed and, when relied on together, refused; the section 16 examples still work |
-| `tests/correction6_end_word.rs` | A pushed end word is refused, writes no state and opens no path, on skip and on stop; `finish` still steps the end item; the verifier's end-item treatment and the stepper agree |
 | `tests/correction5_evidence_domain.rs` | Conflicts that only unlabelled values show (overlapping ranges, masks, intersections of several contracts, two evidence dimensions together) are found; labelled words keep their behaviour; over every legal observation the domain gives every contract outcome, and the stepper shows no conflict the verifier did not report |
+| `tests/correction6_end_word.rs` | A pushed end word is refused, writes no state and opens no path, on skip and on stop; `finish` still steps the end item; the verifier's end-item treatment and the stepper agree |
 | `tests/correction7_state_domain.rs` | State contracts whose only witnesses are unlabelled (ranges, masks, FORBID on the same field, a `requires` rule on a field the clauses do not name, several fields at once) verify and commit at run time; contradictions are still `Unsatisfiable`; past the bound it is `TooManyStates` |
+| `tests/correction8_representatives.rs` | `legal_next_representatives` lists one word per accepted class; the other words of an accepted class are accepted the same way, and words of an unlisted class are refused |
 | `src/verify/domain.rs` (unit) | On two tiny schemas, for 1,900 random clause sets, the domain gives exactly the matcher answers brute force over every legal word gives; for 4,000 random positive and FORBID sets, the state witness exists exactly when brute force finds one |
 | `src/step/authorize.rs` (unit) | Merging, conflicts on fields, stacks, effects and frame facts, fan-out and candidate limits |
 | `tests/step01_model.rs` | Dimensions resolve by name; bad clauses give interact's `validate_rule_table` findings one for one; role rules |

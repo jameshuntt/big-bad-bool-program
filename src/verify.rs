@@ -179,11 +179,17 @@ impl VerifiedProgram {
         &self.report
     }
 
-    /// Every observation the state search tried and `legal_next` draws
-    /// from, at position 0: each observed evidence dimension absent or at
-    /// one of its domain words. A dimension's domain holds every labelled
+    /// Every observation the state search tried and
+    /// [`Stepper::legal_next_representatives`](crate::Stepper::legal_next_representatives)
+    /// draws from, at position 0: each observed evidence dimension absent or
+    /// at one of its domain words. A dimension's domain holds every labelled
     /// word and one legal word for each distinct set of matcher answers a
     /// legal word can give (see the module notes).
+    ///
+    /// These are representatives of classes, not every word the stepper
+    /// accepts: another word with the same matcher answers and legality is
+    /// stepped in the same way. The end item is among them, as `finish`
+    /// steps it.
     #[must_use]
     pub fn inputs(&self) -> &[Observation] {
         &self.inputs

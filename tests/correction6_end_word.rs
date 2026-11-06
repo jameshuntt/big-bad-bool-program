@@ -283,7 +283,7 @@ fn verifier_and_runtime_agree_on_the_end_word() {
             // The representatives of the next step never include the end word.
             assert!(
                 stepper
-                    .legal_next()
+                    .legal_next_representatives()
                     .iter()
                     .all(|o| o.word(SIGNAL) != Some(CLOSE))
             );

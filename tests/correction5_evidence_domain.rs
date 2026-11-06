@@ -260,7 +260,11 @@ fn an_unlabelled_mask_match_is_in_the_domain() {
         "the least alarm word with both bits"
     );
     let stepper = Stepper::new(&program, NoObserver);
-    assert!(stepper.legal_next().contains(&observe(&[(ALARM, 0b0110)])));
+    assert!(
+        stepper
+            .legal_next_representatives()
+            .contains(&observe(&[(ALARM, 0b0110)]))
+    );
     // At run time 14 is armed too; the domain holds one word for that class.
     let mut stepper = Stepper::new(&program, NoObserver);
     let r = stepper.push(observe(&[(ALARM, 14)]));

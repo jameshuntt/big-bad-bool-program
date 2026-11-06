@@ -18,6 +18,7 @@
 
 mod codes;
 mod contract;
+mod digest;
 mod frame;
 mod model;
 mod observe;
@@ -29,6 +30,7 @@ mod verify;
 
 pub use codes::{Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
+pub use digest::{SPEC_FORMAT, TRACE_FORMAT, TraceHeader, spec_digest, spec_material};
 pub use frame::{FrameFacts, Recognizer};
 pub use model::{
     Clause, ContainmentSpec, ContractId, ContractSpec, DimensionId, DimensionRole, DimensionSpec,
@@ -44,6 +46,7 @@ pub use verify::{VerificationReport, VerifiedProgram, VerifyLimits, verify};
 pub use big_bad_bool_interact::{FieldMatcher, FieldValue, MatchOp};
 pub use flaga_solver::Schema;
 pub use liaise::Liaise;
+pub use stable_digest::StableDigest;
 
 /// Paths the macros expand to. Not part of the API.
 #[doc(hidden)]

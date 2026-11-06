@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 
 use big_bad_bool_core::BitFieldSpec;
 use big_bad_bool_interact::MatchOp;
+use stable_digest::StableDigest;
 
 use crate::codes::Finding;
+use crate::digest::{TRACE_FORMAT, TraceHeader, spec_digest};
 use crate::frame::Recognizer;
 use crate::model::{ContractId, DimensionSpec, ProgramSpec, ResolvedStackOp, field_value};
 use crate::step::ProjectionState;
@@ -104,6 +106,7 @@ pub struct VerifiedProgram {
     recognizer: Recognizer,
     index: ContractIndex,
     items: Vec<u128>,
+    digest: StableDigest,
     report: VerificationReport,
 }
 
@@ -118,6 +121,21 @@ impl VerifiedProgram {
     #[must_use]
     pub const fn recognizer(&self) -> &Recognizer {
         &self.recognizer
+    }
+
+    /// The spec's digest: what a trace names, and what a parked session is checked against.
+    #[must_use]
+    pub const fn digest(&self) -> &StableDigest {
+        &self.digest
+    }
+
+    /// The header every trace of this program starts with.
+    #[must_use]
+    pub fn trace_header(&self) -> TraceHeader {
+        TraceHeader {
+            format: TRACE_FORMAT,
+            spec: self.digest.clone(),
+        }
     }
 
     /// The report, holding any `info` findings.
@@ -263,11 +281,13 @@ pub fn verify(
         return Err(report);
     }
     let index = ContractIndex::new(&spec);
+    let digest = spec_digest(&spec);
     Ok(VerifiedProgram {
         spec,
         recognizer,
         index,
         items,
+        digest,
         report,
     })
 }

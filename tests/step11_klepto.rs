@@ -263,7 +263,7 @@ fn klepto_agrees_on_declarations_and_references() {
                 .zip(&expected_declares_in_order)
                 .filter(|(_, name_at)| **name_at < at)
                 .map(|(f, _)| f)
-                .last()
+                .next_back()
                 .expect("an argument sits in a function");
             let is_param = enclosing
                 .args

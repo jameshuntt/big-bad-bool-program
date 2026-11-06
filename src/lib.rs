@@ -61,9 +61,9 @@ pub mod __private {
     pub use flaga_solver::schema_of;
 }
 
-/// A dimension over a `#[bitpack]` type: `dimension!(TokenWord, "token", Evidence)`.
+/// A dimension over a `#[bitpack]` type: `dimension!(ItemWord, "item", Evidence)`.
 ///
-/// Expands to `dimension::<TokenWord>("token", schema_of!(TokenWord), DimensionRole::Evidence)`.
+/// Expands to `dimension::<ItemWord>("item", schema_of!(ItemWord), DimensionRole::Evidence)`.
 /// The schema and the field writes both come from the one type.
 #[macro_export]
 macro_rules! dimension {

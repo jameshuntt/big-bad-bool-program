@@ -1,4 +1,4 @@
-//! Commit: the one function that writes state.
+//! Commit: the one place that writes state.
 //!
 //! [`ProjectionState`]'s fields are private to this file. Nothing else in the
 //! crate can change them. Commit applies stack ops, then transition writes

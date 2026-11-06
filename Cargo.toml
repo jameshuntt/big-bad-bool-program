@@ -1,0 +1,29 @@
+[package]
+name = "big-bad-bool-contract"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["James Hunt <james@1o.business>"]
+description = "Contracts across Big Bad Bool packed words: framing, verification, and stepping with one write path."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = []
+# Publishes step events to ob-serve-a-bowl as WakeKey64 packets.
+bowl = ["dep:ob-serve-a-bowl"]
+
+[dependencies]
+big-bad-bool-core = "0.1.1"
+big-bad-bool-interact = "0.1.0"
+flaga_solver = "0.1.1"
+liaise = "0.2.4"
+stable_digest = "0.1.1"
+ob-serve-a-bowl = { version = "0.2.2", optional = true }
+
+[dev-dependencies]
+big-bad-bool = "0.1.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

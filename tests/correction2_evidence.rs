@@ -122,6 +122,7 @@ const CONTRACTS: &[ContractSpec] = &[NIGHT_STAFF_ENTRY, DAY_ENTRY, DOOR_PROPPED,
 const CONTAIN: ContainmentSpec = ContainmentSpec {
     max_interpretations: 2,
     max_candidates: 4,
+    max_actualized: 4,
     max_stack_depth: 4,
     on_refusal: RefusalRule::SkipObservation,
 };
@@ -175,18 +176,16 @@ fn line(spec: &ProgramSpec, r: &StepResult) -> String {
         .iter()
         .map(|e| spec.dimension(e.dimension).unwrap().describe(e.word))
         .collect();
-    match r.committed {
-        Some(id) => format!(
-            "{}: {} {}",
-            r.position,
-            spec.contract(id).unwrap().name,
-            effects.join(" ")
-        ),
-        None => {
-            let codes: Vec<String> = r.refusals.iter().map(ToString::to_string).collect();
-            format!("{}: refused {}", r.position, codes.join("; "))
-        }
+    if r.committed.is_empty() {
+        let codes: Vec<String> = r.refusals.iter().map(ToString::to_string).collect();
+        return format!("{}: refused {}", r.position, codes.join("; "));
     }
+    let names: Vec<&str> = r
+        .committed
+        .iter()
+        .map(|id| spec.contract(*id).unwrap().name)
+        .collect();
+    format!("{}: {} {}", r.position, names.join("+"), effects.join(" "))
 }
 
 #[test]
@@ -304,7 +303,7 @@ fn an_observation_holds_only_observed_evidence() {
 fn stepper_refusal(program: &VerifiedProgram, o: Observation) -> Refusal {
     let mut stepper = Stepper::new(program, big_bad_bool_contract::NoObserver);
     let r = stepper.push(o);
-    assert!(r[0].committed.is_none());
+    assert!(r[0].committed.is_empty());
     r[0].refusals.last().unwrap().clone()
 }
 

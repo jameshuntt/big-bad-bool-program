@@ -8,8 +8,10 @@ use crate::codes::Refusal;
 pub(crate) enum Limit {
     /// Frame interpretations at one position, after longest-match.
     Interpretations,
-    /// Candidates at one position, before equal writes are merged.
+    /// Candidates at one position: contract and frame pairs, before merging.
     Candidates,
+    /// Distinct contracts actualized together at one position.
+    Actualized,
 }
 
 impl Limit {
@@ -17,6 +19,7 @@ impl Limit {
         match self {
             Self::Interpretations => "interpretations",
             Self::Candidates => "candidates",
+            Self::Actualized => "actualized",
         }
     }
 }

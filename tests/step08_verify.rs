@@ -88,28 +88,42 @@ fn unsatisfiable() {
 }
 
 #[test]
-fn ambiguous_k1_k2_pair() {
+fn conflicting_k1_k2_pair() {
     // K2 without `frame.position = Interior`: plain `fn` matches K1 and K2.
+    // K2 writing nothing is compatible with K1, so both actualize and there is no finding.
     const K2_LOOSE: ContractSpec = contract("fn-keyword-after-modifier")
         .when(&[token(common::KW_FN)])
         .require(&[clause("state", FieldMatcher::eq("phase", 1))]);
     let mut contracts = common::CONTRACTS.to_vec();
     contracts[1] = K2_LOOSE;
+    let compatible = report(with(&contracts, common::SEQUENCES));
+    assert!(
+        !compatible
+            .findings
+            .iter()
+            .any(|f| matches!(f, Finding::Conflict { .. })),
+        "{:?}",
+        compatible.findings
+    );
+    // K2 writing phase Items contradicts K1's phase FnHead.
+    const K2_TO_ITEMS: ContractSpec = K2_LOOSE.transition(&[set("state", "phase", 0)]);
+    contracts[1] = K2_TO_ITEMS;
     let report = report(with(&contracts, common::SEQUENCES));
-    let ambiguous: Vec<&Finding> = report
+    let conflicts: Vec<&Finding> = report
         .findings
         .iter()
-        .filter(|f| matches!(f, Finding::Ambiguous { .. }))
+        .filter(|f| matches!(f, Finding::Conflict { .. }))
         .collect();
     assert_eq!(
-        ambiguous,
-        [&Finding::Ambiguous {
+        conflicts,
+        [&Finding::Conflict {
             first: "fn-head-begin",
             second: "fn-keyword-after-modifier",
+            target: "state.phase".to_owned(),
             witness: "context=[{scope=Module, expecting=Item, marks=none}] state={phase=FnHead, marks=can_declare} evidence=token={kind=KwFn} frame={sequence=FnHead, offset=0, position=Begin, marks=none, construct=FunctionDeclaration, role=None, modifier=None}".to_owned(),
         }]
     );
-    assert_eq!(ambiguous[0].code(), "BBBC0021");
+    assert_eq!(conflicts[0].code(), "BBBC0030");
 }
 
 #[test]

@@ -205,6 +205,7 @@ fn program() -> VerifiedProgram {
         .contain(ContainmentSpec {
             max_interpretations: 2,
             max_candidates: 2,
+            max_actualized: 2,
             max_stack_depth: 64,
             on_refusal: RefusalRule::Stop,
         });
@@ -275,7 +276,7 @@ fn shadow(program: &VerifiedProgram, tokens: &[Token]) -> Option<String> {
             .extend(stepper.push(Observation::new(i as u32).with(DimensionId(0), token_kind(t))));
     }
     results.extend(stepper.finish());
-    if results.iter().any(|r| r.committed.is_none()) {
+    if results.iter().any(|r| r.committed.is_empty()) {
         return None;
     }
     // Rebuild the entry tree from effects; the key text comes from the token at the effect's position.

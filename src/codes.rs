@@ -222,17 +222,22 @@ pub enum Finding {
         /// The field whose clauses contradict, or `(joint)`.
         field: &'static str,
     },
-    /// Two contracts with different writes that both hold in one reachable state.
+    // Code 21 (`Ambiguous`: two candidates with different writes) is retired.
+    // Compatible candidates now actualize together; see `Conflict`, code 30.
+    /// Two contracts that actualize together in one reachable state and
+    /// write different values to one target.
     #[liaise(
-        code = 21,
-        msg = "`{first}` and `{second}` both hold with different writes at {witness}",
-        evidence(first, second, witness)
+        code = 30,
+        msg = "`{first}` and `{second}` disagree on {target} at {witness}",
+        evidence(first, second, target, witness)
     )]
-    Ambiguous {
-        /// The lower contract.
+    Conflict {
+        /// The contract first by name.
         first: &'static str,
-        /// The higher contract.
+        /// The other contract.
         second: &'static str,
+        /// `dimension.field`, or `dimension stack`.
+        target: String,
         /// State and input where both hold.
         witness: String,
     },
@@ -368,21 +373,10 @@ pub enum Refusal {
         /// What the fact view holds.
         observed: String,
     },
-    /// Two candidates with different writes.
-    #[liaise(
-        code = 103,
-        msg = "`{first}` and `{second}` both hold at position {position} with different writes",
-        evidence(position, first, second)
-    )]
-    Ambiguous {
-        /// Input position.
-        position: u32,
-        /// The lower contract.
-        first: &'static str,
-        /// The higher contract.
-        second: &'static str,
-    },
-    /// A containment count over its limit.
+    // Code 103 (`Ambiguous`: two candidates with different writes) is retired.
+    // Compatible candidates now actualize together; see `Conflict`, code 109.
+    /// A containment count over its limit: interpretations, candidates, or
+    /// contracts actualized together.
     #[liaise(
         code = 104,
         msg = "{limit} limit exceeded at position {position}: observed {observed}, permitted {permitted}",
@@ -391,7 +385,7 @@ pub enum Refusal {
     LimitExceeded {
         /// Input position.
         position: u32,
-        /// `interpretations` or `candidates`.
+        /// `interpretations`, `candidates` or `actualized`.
         limit: &'static str,
         /// The count.
         observed: usize,
@@ -454,5 +448,22 @@ pub enum Refusal {
         dimension: String,
         /// The rule that refuses it.
         rule: &'static str,
+    },
+    /// Two actualizing contracts that write different values to one target.
+    /// Nothing commits.
+    #[liaise(
+        code = 109,
+        msg = "`{first}` and `{second}` disagree on {target} at position {position}",
+        evidence(position, first, second, target)
+    )]
+    Conflict {
+        /// Input position.
+        position: u32,
+        /// The contract first by name.
+        first: &'static str,
+        /// The other contract.
+        second: &'static str,
+        /// `dimension.field`, or `dimension stack`.
+        target: String,
     },
 }

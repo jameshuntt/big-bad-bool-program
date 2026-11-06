@@ -46,16 +46,28 @@ fn text(spec: &ProgramSpec, results: &[StepResult], events: &[String]) -> String
     out
 }
 
-fn committed(spec: &ProgramSpec, results: &[StepResult]) -> Vec<(u32, &'static str)> {
+/// (position, contracts joined by `+`, or `-` when nothing committed).
+fn committed(spec: &ProgramSpec, results: &[StepResult]) -> Vec<(u32, String)> {
     results
         .iter()
         .map(|r| {
+            let names = common::names(spec, &r.committed);
             (
                 r.position,
-                r.committed
-                    .map_or("-", |id| spec.contract(id).unwrap().name),
+                if names.is_empty() {
+                    "-".to_owned()
+                } else {
+                    names
+                },
             )
         })
+        .collect()
+}
+
+fn pairs(expected: &[(u32, &str)]) -> Vec<(u32, String)> {
+    expected
+        .iter()
+        .map(|(p, n)| (*p, (*n).to_owned()))
         .collect()
 }
 
@@ -77,7 +89,7 @@ fn async_fn_foo() {
     let (results, events) = run(&program, common::ASYNC_FN_FOO);
     assert_eq!(
         committed(spec, &results),
-        [
+        pairs(&[
             (0, "fn-head-begin"),
             (1, "fn-keyword-after-modifier"),
             (2, "declare-function-name"),
@@ -89,7 +101,7 @@ fn async_fn_foo() {
             (8, "open-fn-body"),
             (9, "close-fn-body"),
             (10, "end"),
-        ]
+        ])
     );
     // What observers see at position 2, in order (report section 16).
     assert_eq!(
@@ -122,14 +134,14 @@ fn bar_foo_inside_the_body() {
     let (results, events) = run(&program, common::ASYNC_FN_FOO_CALLING_BAR);
     assert_eq!(
         committed(spec, &results)[9..],
-        [
+        pairs(&[
             (9, "callee-reference"),
             (10, "open-call-args"),
             (11, "argument-reference"),
             (12, "close-call"),
             (13, "close-fn-body"),
             (14, "end"),
-        ]
+        ])
     );
     // `foo` was declared at 2 and is referenced at 11.
     assert_eq!(
@@ -186,7 +198,7 @@ fn bar_foo_at_module_level_skips() {
     let (results, events) = run(&program, common::BAR_FOO);
     assert_eq!(
         committed(spec, &results),
-        [(0, "-"), (1, "-"), (2, "-"), (3, "-"), (4, "end")]
+        pairs(&[(0, "-"), (1, "-"), (2, "-"), (3, "-"), (4, "end")])
     );
     golden(
         "step06_bar_foo_module_skip.txt",

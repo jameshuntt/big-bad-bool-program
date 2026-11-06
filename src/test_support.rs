@@ -73,6 +73,7 @@ pub const RECOGNIZER: RecognizerSpec = RecognizerSpec {
 pub const CONTAIN: ContainmentSpec = ContainmentSpec {
     max_interpretations: 4,
     max_candidates: 4,
+    max_actualized: 3,
     max_stack_depth: 2,
     on_refusal: RefusalRule::Stop,
 };

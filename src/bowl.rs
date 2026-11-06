@@ -6,8 +6,9 @@
 //! - `field_mask` holds one bit per changed dimension (dimensions 0 to 15;
 //!   higher ones do not fit the 16-bit mask and are left out);
 //! - `reason` is `manual`, an existing label;
-//! - the payload holds the position (`slot`), the focal index (`generation`)
-//!   and the contract id (`offset`, `u32::MAX` when none).
+//! - the payload holds the position (`slot`), the focal index (`generation`),
+//!   the lowest authorized contract id (`offset`, `u32::MAX` when none) and,
+//!   on `Authorized`, how many contracts actualize together (`len`).
 //!
 //! `publish` returns a `WakeReport`. The adapter drops it: nothing flows back
 //! to the stepper.
@@ -135,15 +136,19 @@ impl BowlObserver {
         );
         let contract = match event {
             StepEvent::Candidate(c) => Some(c.contract),
-            StepEvent::Authorized(id) => Some(*id),
+            StepEvent::Authorized(ids) => ids.first().copied(),
             StepEvent::Committed { .. } | StepEvent::Emitted(_) => self.contract,
             _ => None,
+        };
+        let together = match event {
+            StepEvent::Authorized(ids) => ids.len(),
+            _ => 0,
         };
         let payload = PayloadRef::new(
             self.position,
             self.focal,
             contract.map_or(u32::MAX, |c| u32::from(c.0)),
-            0,
+            u32::try_from(together).unwrap_or(u32::MAX),
         );
         ObservablePacket::new(key, payload)
     }
@@ -159,7 +164,7 @@ impl Observer for BowlObserver {
                 self.position = o.position();
                 self.contract = None;
             }
-            StepEvent::Authorized(id) => self.contract = Some(*id),
+            StepEvent::Authorized(ids) => self.contract = ids.first().copied(),
             _ => {}
         }
         let packet = self.packet(event);

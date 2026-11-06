@@ -24,10 +24,10 @@ const CASES: &[Case] = &[
         source: r#"
             use big_bad_bool_contract::{AuthorizedTransition, ContractId};
             pub fn forge() -> AuthorizedTransition {
-                AuthorizedTransition { contract: ContractId(0), position: 0 }
+                AuthorizedTransition { contracts: vec![ContractId(0)], position: 0 }
             }
         "#,
-        expected_stderr: "fields `contract` and `position` of struct `AuthorizedTransition` are private",
+        expected_stderr: "cannot construct `AuthorizedTransition` with struct literal syntax due to private fields",
     },
     Case {
         name: "candidate_is_not_a_transition",
@@ -122,6 +122,31 @@ const CASES: &[Case] = &[
             }
         "#,
         expected_stderr: "types differ in mutability",
+    },
+    Case {
+        name: "observer_cannot_change_the_authorized_set",
+        source: r#"
+            use big_bad_bool_contract::{ContractId, Observer, StepEvent};
+            pub struct Meddler;
+            impl Observer for Meddler {
+                fn observe(&mut self, event: &StepEvent<'_>) {
+                    if let StepEvent::Authorized(ids) = event {
+                        ids[0] = ContractId(1);
+                    }
+                }
+            }
+        "#,
+        expected_stderr: "cannot assign to `ids[_]`, which is behind a `&` reference",
+    },
+    Case {
+        name: "transition_has_no_plan_outside",
+        source: r#"
+            use big_bad_bool_contract::AuthorizedTransition;
+            pub fn peek(t: &AuthorizedTransition) {
+                let _ = t.plan();
+            }
+        "#,
+        expected_stderr: "method `plan` is private",
     },
     Case {
         name: "build_verified_program",

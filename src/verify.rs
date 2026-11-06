@@ -676,7 +676,7 @@ fn search(
         .iter()
         .map(|s| vec![false; s.items.len()])
         .collect();
-    let mut ambiguous: Vec<(ContractId, ContractId)> = Vec::new();
+    let mut conflicts: Vec<(&'static str, &'static str, String)> = Vec::new();
     let mut no_exit: Option<String> = None;
     let mut complete = true;
     let frame_describe = spec.frame_dim().map(|d| &spec.dims[d]);
@@ -702,16 +702,19 @@ fn search(
                 })
                 .collect();
             match authorize(spec, &state, &candidates, 0, 0) {
-                Err(crate::codes::Refusal::Ambiguous { first, second, .. }) => {
-                    let ids = (
-                        spec.contract_id(first).unwrap_or(ContractId(0)),
-                        spec.contract_id(second).unwrap_or(ContractId(0)),
-                    );
-                    if !ambiguous.contains(&ids) {
-                        ambiguous.push(ids);
-                        found.push(Finding::Ambiguous {
+                Err(crate::codes::Refusal::Conflict {
+                    first,
+                    second,
+                    target,
+                    ..
+                }) => {
+                    let key = (first, second, target.clone());
+                    if !conflicts.contains(&key) {
+                        conflicts.push(key);
+                        found.push(Finding::Conflict {
                             first,
                             second,
+                            target,
                             witness: format!(
                                 "{} evidence={} frame={}",
                                 render_state(spec, &state),
@@ -726,11 +729,13 @@ fn search(
                 }
                 Err(_) => {}
                 Ok(transition) => {
-                    let contract = usize::from(transition.contract().0);
+                    let actualized = transition.contracts().to_vec();
                     let mut next = state.clone();
                     if commit(spec, &mut next, transition).is_ok() {
                         exit = true;
-                        committed[contract] = true;
+                        for c in actualized {
+                            committed[usize::from(c.0)] = true;
+                        }
                         if let Some((s, o)) = input.sequence {
                             used[s][o] = true;
                         }

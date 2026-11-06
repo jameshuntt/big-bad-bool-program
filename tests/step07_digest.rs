@@ -28,6 +28,9 @@ fn section_16_digest_is_fixed() {
     assert!(material.starts_with(SPEC_FORMAT));
     assert!(material.contains("contract[2].name=declare-function-name\n"));
     assert!(material.contains("contract[2].forbid[0]=context.marks eq:1\n"));
+    // Spec format v2 (correction 3) carries the fan-out limit.
+    assert!(material.starts_with("big-bad-bool-contract.spec.v2\n"));
+    assert!(material.contains("containment.max_actualized=4\n"));
 }
 
 #[test]

@@ -20,8 +20,8 @@ pub enum StepEvent<'a> {
     Candidate(&'a Candidate),
     /// A contract refusal (only when nothing commits) or a containment refusal.
     Refused(&'a Refusal),
-    /// Containment authorized this contract.
-    Authorized(ContractId),
+    /// Containment authorized these contracts to actualize together, in id order.
+    Authorized(&'a [ContractId]),
     /// Commit replaced the state.
     Committed {
         /// The state before.

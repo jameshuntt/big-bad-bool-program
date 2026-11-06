@@ -96,6 +96,7 @@ const CONTRACTS: &[ContractSpec] = &[
 const CONTAIN: ContainmentSpec = ContainmentSpec {
     max_interpretations: 2,
     max_candidates: 4,
+    max_actualized: 4,
     max_stack_depth: 4,
     on_refusal: RefusalRule::SkipObservation,
 };
@@ -166,9 +167,13 @@ fn run(program: &VerifiedProgram) -> (Vec<StepResult>, Vec<StepResult>) {
 fn names(program: &VerifiedProgram, results: &[StepResult]) -> Vec<String> {
     results
         .iter()
-        .map(|r| match r.committed {
-            Some(id) => program.spec().contract(id).unwrap().name.to_owned(),
-            None => format!("refused {}", r.refusals.last().unwrap()),
+        .map(|r| match r.committed.as_slice() {
+            [] => format!("refused {}", r.refusals.last().unwrap()),
+            ids => ids
+                .iter()
+                .map(|id| program.spec().contract(*id).unwrap().name)
+                .collect::<Vec<_>>()
+                .join("+"),
         })
         .collect()
 }

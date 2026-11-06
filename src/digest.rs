@@ -13,7 +13,7 @@ use stable_digest::StableDigest;
 use crate::model::{Clause, ItemMatch, ProgramSpec, RefusalRule, StackOp, Write};
 
 /// The material's first line. Changes when the material's form changes.
-pub const SPEC_FORMAT: &str = "big-bad-bool-contract.spec.v1";
+pub const SPEC_FORMAT: &str = "big-bad-bool-contract.spec.v2";
 
 /// The trace format a [`TraceHeader`] names.
 pub const TRACE_FORMAT: &str = "big-bad-bool-contract.trace.v1";
@@ -222,6 +222,7 @@ pub fn spec_material(spec: &ProgramSpec) -> String {
         &c.max_interpretations.to_string(),
     );
     m.field("containment.max_candidates", &c.max_candidates.to_string());
+    m.field("containment.max_actualized", &c.max_actualized.to_string());
     m.field(
         "containment.max_stack_depth",
         &c.max_stack_depth.to_string(),

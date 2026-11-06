@@ -1,10 +1,12 @@
 //! Commit: the one place that writes state.
 //!
 //! [`ProjectionState`]'s fields are private to this file. Nothing else in the
-//! crate can change them. Commit applies stack ops, then transition writes
-//! (to the top entry of a stacked dimension), each through interact's
-//! `patch_word`; checks every changed word with flaga_solver's `check`; builds
-//! the effect words; and replaces the state only when everything passed.
+//! crate can change them. Commit applies the authorized plan: stack ops, then
+//! transition writes (to the top entry of a stacked dimension), each through
+//! interact's `patch_word`; checks every changed word with flaga_solver's
+//! `check`, once, after all writes of all actualized contracts; builds one
+//! effect word per effect dimension; and replaces the state only when
+//! everything passed.
 
 use big_bad_bool_interact::ReconstructionError;
 
@@ -140,53 +142,53 @@ pub(crate) fn check(position: u32, dim: &DimensionSpec, word: u128) -> Result<()
     }
 }
 
-/// Applies an authorized transition. On any refusal the state is left as it was.
+/// Applies an authorized transition: the merged writes of every contract
+/// it names. On any refusal the state is left as it was.
 pub(crate) fn commit(
     spec: &ProgramSpec,
     state: &mut ProjectionState,
     transition: AuthorizedTransition,
 ) -> Result<Vec<Effect>, Refusal> {
     let position = transition.position();
-    let c = &spec.resolved[usize::from(transition.contract().0)];
+    let plan = transition.plan();
     let mut next = state.clone();
     let mut changed: Vec<usize> = Vec::new();
 
-    for op in &c.stack {
-        match op {
-            ResolvedStackOp::Pop { dim } => {
-                next.stacks[*dim].pop().ok_or(Refusal::StackUnderflow {
-                    position,
-                    dimension: spec.dims[*dim].name(),
-                })?;
-                changed.push(*dim);
-            }
-            ResolvedStackOp::Push { dim, values } => {
-                let d = &spec.dims[*dim];
-                let word = d
-                    .patch(d.default_word(), values)
-                    .map_err(illegal(position, d))?;
-                next.stacks[*dim].push(word);
-                changed.push(*dim);
+    for (dim, ops) in &plan.stack {
+        let d = &spec.dims[*dim];
+        for op in ops {
+            match op {
+                ResolvedStackOp::Pop { .. } => {
+                    next.stacks[*dim].pop().ok_or(Refusal::StackUnderflow {
+                        position,
+                        dimension: d.name(),
+                    })?;
+                }
+                ResolvedStackOp::Push { values, .. } => {
+                    let word = d
+                        .patch(d.default_word(), values)
+                        .map_err(illegal(position, d))?;
+                    next.stacks[*dim].push(word);
+                }
             }
         }
+        changed.push(*dim);
     }
 
-    for writes in &c.transition {
-        let d = &spec.dims[writes.dim];
+    for (dim, values) in &plan.transition {
+        let d = &spec.dims[*dim];
         let slot = if d.stack_depth().is_some() {
-            next.stacks[writes.dim]
+            next.stacks[*dim]
                 .last_mut()
                 .ok_or(Refusal::StackUnderflow {
                     position,
                     dimension: d.name(),
                 })?
         } else {
-            &mut next.words[writes.dim]
+            &mut next.words[*dim]
         };
-        *slot = d
-            .patch(*slot, &writes.values)
-            .map_err(illegal(position, d))?;
-        changed.push(writes.dim);
+        *slot = d.patch(*slot, values).map_err(illegal(position, d))?;
+        changed.push(*dim);
     }
 
     changed.sort_unstable();
@@ -200,15 +202,15 @@ pub(crate) fn commit(
         }
     }
 
-    let mut effects = Vec::with_capacity(c.emit.len());
-    for writes in &c.emit {
-        let d = &spec.dims[writes.dim];
+    let mut effects = Vec::with_capacity(plan.emit.len());
+    for (dim, values) in &plan.emit {
+        let d = &spec.dims[*dim];
         let word = d
-            .patch(d.default_word(), &writes.values)
+            .patch(d.default_word(), values)
             .map_err(illegal(position, d))?;
         check(position, d, word)?;
         effects.push(Effect {
-            dimension: DimensionId(writes.dim as u16),
+            dimension: DimensionId(*dim as u16),
             word,
             position,
         });
@@ -286,6 +288,25 @@ mod tests {
             }
         );
         assert_eq!(state, before);
+    }
+
+    #[test]
+    fn merged_writes_are_checked_as_one_word() {
+        // timer alone needs inline_queue; with an inline contract beside it the word is legal.
+        const INLINE_ONLY: ContractSpec = contract("inline-only")
+            .when(WHEN_B)
+            .transition(&[SET_INLINE]);
+        let spec = spec(&[TIMER_ONLY, INLINE_ONLY]);
+        let mut state = ProjectionState::start(&spec);
+        let both = [0, 1].map(|id| Candidate {
+            contract: ContractId(id),
+            position: 7,
+            frame: None,
+        });
+        let t = authorize(&spec, &state, &both, 7, 0).unwrap();
+        assert_eq!(t.contracts(), [ContractId(0), ContractId(1)]);
+        commit(&spec, &mut state, t).unwrap();
+        assert_eq!(state.word(DimensionId(2)), 0b01_001);
     }
 
     #[test]

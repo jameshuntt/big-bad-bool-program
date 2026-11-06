@@ -29,9 +29,9 @@ use crate::verify::VerifiedProgram;
 pub struct StepResult {
     /// The input position.
     pub position: u32,
-    /// The contract committed, if any.
-    pub committed: Option<ContractId>,
-    /// The effects it emitted.
+    /// The contracts that actualized together, in id order. Empty when nothing committed.
+    pub committed: Vec<ContractId>,
+    /// The effects they emitted: one word per effect dimension, in dimension order.
     pub effects: Vec<Effect>,
     /// When nothing committed: the contract refusals (for `NoContract` only)
     /// and then the containment or commit refusal.
@@ -268,6 +268,8 @@ impl<'p, O: Observer> Stepper<'p, O> {
             }
         }
         refused.retain(|(id, _)| !candidates.iter().any(|c| c.contract == *id));
+        // Name order, so the refusals do not depend on the order contracts were declared in.
+        refused.sort_by_key(|(id, _)| spec.resolved[usize::from(id.0)].name);
 
         match authorize(spec, &self.state, &candidates, position, refused.len()) {
             Err(refusal) => {
@@ -280,8 +282,8 @@ impl<'p, O: Observer> Stepper<'p, O> {
                 self.refuse(position, all)
             }
             Ok(transition) => {
-                let contract = transition.contract();
-                self.observer.observe(&StepEvent::Authorized(contract));
+                let contracts = transition.contracts().to_vec();
+                self.observer.observe(&StepEvent::Authorized(&contracts));
                 let before = self.state.clone();
                 match commit(spec, &mut self.state, transition) {
                     Err(refusal) => self.refuse(position, vec![refusal]),
@@ -295,7 +297,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
                         }
                         StepResult {
                             position,
-                            committed: Some(contract),
+                            committed: contracts,
                             effects,
                             refusals: Vec::new(),
                         }
@@ -314,7 +316,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
         }
         StepResult {
             position,
-            committed: None,
+            committed: Vec::new(),
             effects: Vec::new(),
             refusals,
         }

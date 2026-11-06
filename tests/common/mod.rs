@@ -525,6 +525,7 @@ pub const CONTRACTS: &[ContractSpec] = &[
 pub const CONTAINMENT: ContainmentSpec = ContainmentSpec {
     max_interpretations: 4,
     max_candidates: 4,
+    max_actualized: 4,
     max_stack_depth: 32,
     on_refusal: RefusalRule::Stop,
 };
@@ -652,7 +653,7 @@ pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
                 .map_or("no frame", |s| spec.sequence(s).unwrap().name)
         ),
         StepEvent::Refused(r) => format!("refused {r}"),
-        StepEvent::Authorized(id) => format!("authorized {}", spec.contract(*id).unwrap().name),
+        StepEvent::Authorized(ids) => format!("authorized {}", names(spec, ids)),
         StepEvent::Committed { before, after } => {
             format!("committed {}", state_changes(spec, before, after))
         }
@@ -668,10 +669,22 @@ pub fn render_event(spec: &ProgramSpec, event: &StepEvent<'_>) -> String {
     }
 }
 
+/// Contract names joined by `+`, in the order given.
+pub fn names(spec: &ProgramSpec, ids: &[big_bad_bool_contract::ContractId]) -> String {
+    ids.iter()
+        .map(|id| spec.contract(*id).unwrap().name)
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// One line per step result.
 pub fn render_result(spec: &ProgramSpec, r: &StepResult) -> String {
-    match r.committed {
-        Some(id) => {
+    match r.committed.as_slice() {
+        [] => {
+            let refusals: Vec<String> = r.refusals.iter().map(ToString::to_string).collect();
+            format!("{}: refused [{}]", r.position, refusals.join("; "))
+        }
+        ids => {
             let effects: Vec<String> = r
                 .effects
                 .iter()
@@ -683,13 +696,9 @@ pub fn render_result(spec: &ProgramSpec, r: &StepResult) -> String {
             format!(
                 "{}: commit {} effects [{}]",
                 r.position,
-                spec.contract(id).unwrap().name,
+                names(spec, ids),
                 effects.join(", ")
             )
-        }
-        None => {
-            let refusals: Vec<String> = r.refusals.iter().map(ToString::to_string).collect();
-            format!("{}: refused [{}]", r.position, refusals.join("; "))
         }
     }
 }

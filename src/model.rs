@@ -397,8 +397,10 @@ pub enum RefusalRule {
 pub struct ContainmentSpec {
     /// Frame interpretations per position, after longest-match.
     pub max_interpretations: u8,
-    /// Candidates per position, before equal writes are merged.
+    /// Candidates per position: contract and frame pairs, before merging.
     pub max_candidates: u8,
+    /// Distinct contracts that actualize together at one position.
+    pub max_actualized: u8,
     /// The deepest any stacked dimension may be declared.
     pub max_stack_depth: u16,
     /// What happens after a refusal.
@@ -592,9 +594,20 @@ pub(crate) struct ResolvedContract {
 }
 
 impl ResolvedContract {
-    /// Whether two contracts propose the same writes.
-    pub(crate) fn same_writes(&self, other: &Self) -> bool {
-        self.transition == other.transition && self.stack == other.stack && self.emit == other.emit
+    /// The stack ops on `dim`, in order.
+    pub(crate) fn stack_on(&self, dim: usize) -> Vec<ResolvedStackOp> {
+        self.stack
+            .iter()
+            .filter(|op| match op {
+                ResolvedStackOp::Push { dim: d, .. } | ResolvedStackOp::Pop { dim: d } => *d == dim,
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// True when the contract pushes, pops or writes fields of `dim`.
+    pub(crate) fn touches_stack(&self, dim: usize) -> bool {
+        !self.stack_on(dim).is_empty() || self.transition.iter().any(|w| w.dim == dim)
     }
 }
 

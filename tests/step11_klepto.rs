@@ -121,10 +121,10 @@ fn step(program: &VerifiedProgram, path: &Path) -> Stepped {
     }
     results.extend(stepper.finish());
     assert!(
-        results.iter().all(|r| r.committed.is_some()),
+        results.iter().all(|r| !r.committed.is_empty()),
         "{} steps clean: {:?}",
         path.display(),
-        results.iter().find(|r| r.committed.is_none())
+        results.iter().find(|r| r.committed.is_empty())
     );
     let mut declares = Vec::new();
     let mut references = BTreeSet::new();

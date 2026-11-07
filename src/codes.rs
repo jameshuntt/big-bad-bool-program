@@ -483,8 +483,8 @@ pub enum Refusal {
     },
 }
 
-/// Why `Stepper::commit` did not apply a prepared
-/// step. Nothing changed: the stepper keeps its state, window and version.
+/// Why `Stepper::commit` did not apply a prepared step. Nothing changed: the
+/// stepper keeps its state, window and version, and the observer saw nothing.
 #[derive(Debug, Clone, PartialEq, Eq, LiaiseCodes)]
 #[liaise(prefix = "BBBC", domain = "big-bad-bool-program")]
 pub enum CommitRefusal {
@@ -503,4 +503,17 @@ pub enum CommitRefusal {
     /// The step was prepared by another stepper.
     #[liaise(code = 202, msg = "prepared by another stepper")]
     OtherStepper,
+    /// The stepper is at the last state version, `u64::MAX`: one more commit
+    /// would need a version no counter holds, so it commits nothing more. A
+    /// version is never reused, so a stale preparation is never taken for a
+    /// fresh one.
+    #[liaise(
+        code = 203,
+        msg = "the state version {version} is the last; nothing more can be committed",
+        evidence(version)
+    )]
+    Exhausted {
+        /// The stepper's state version, `u64::MAX`.
+        version: u64,
+    },
 }

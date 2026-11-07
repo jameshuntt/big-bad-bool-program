@@ -9,10 +9,11 @@ mod common;
 use big_bad_bool::bitpack;
 use big_bad_bool_program::{
     CommitRefusal, ContainmentSpec, ContractSpec, DimensionId, FieldMatcher, Liaise, NoObserver,
-    Observation, Program, ProjectionState, Refusal, RefusalRule, StepResult, Stepper,
-    VerifiedProgram, VerifyLimits, clause, contract, dimension, set, verify,
+    Observation, Observer, Program, ProjectionState, Refusal, RefusalRule, StepEvent, StepResult,
+    Stepper, VerifiedProgram, VerifyLimits, clause, contract, dimension, set, verify,
 };
 use common::Recorder;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn section16(containment: ContainmentSpec) -> VerifiedProgram {
     verify(
@@ -432,6 +433,37 @@ fn several_positions_are_one_preparation_and_stop_holds() {
     assert!(stepper.is_halted());
     assert!(stepper.prepare(item(1, A)).results().is_empty());
     assert!(stepper.push(item(1, A)).is_empty());
+}
+
+/// Panics when it sees a write.
+struct PanicsOnCommit;
+
+impl Observer for PanicsOnCommit {
+    fn observe(&mut self, event: &StepEvent<'_>) {
+        assert!(
+            !matches!(event, StepEvent::Committed { .. }),
+            "the observer panics"
+        );
+    }
+}
+
+#[test]
+fn an_observer_panic_during_commit_applies_nothing() {
+    let program = job(RefusalRule::SkipObservation).expect("job program verifies");
+    let mut stepper = Stepper::new(&program, PanicsOnCommit);
+    let start = stepper.state().clone();
+    let prepared = stepper.prepare(item(0, A));
+    assert_eq!(prepared.results()[0].committed.len(), 1);
+    let panicked = catch_unwind(AssertUnwindSafe(|| stepper.commit(prepared)));
+    assert!(panicked.is_err());
+    // The panic reached the caller; the stepper is as it was before the commit.
+    assert_eq!(stepper.version(), 0);
+    assert_eq!(stepper.state(), &start);
+    // It goes on stepping from there: `c` has no contract and is refused.
+    let refused = stepper.push(item(0, C));
+    assert!(refused[0].committed.is_empty());
+    assert_eq!(stepper.version(), 1);
+    assert_eq!(stepper.state(), &start);
 }
 
 #[test]

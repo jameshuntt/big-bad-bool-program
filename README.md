@@ -177,14 +177,20 @@ interpretation, lets every compatible candidate actualize together, and
 commits their merged writes. Only commit writes state. Observers see each
 stage and return nothing.
 
-A step can be taken in two phases. `Stepper::prepare(observation)` (and
-`prepare_finish()`) runs all of the above on a copy of the stepper's state
-and window and returns a `PreparedStep`: each position's result, effects and
-refusals. The stepper and its observer are untouched. `Stepper::commit(prepared)`
-applies exactly that transition once and returns the results; it refuses a
+A step can be taken in two phases, so a host can admit each transition
+before it happens. `Stepper::prepare(observation)` (and `prepare_finish()`)
+authorizes the semantic transition without mutating live state: it runs all
+of the above on a copy of the stepper's state and window and returns a
+`PreparedStep`, each position's result, effects and refusals, the state after
+and the version it was prepared from. The stepper and its observer are
+untouched. The host inspects it and declines it by dropping it.
+`Stepper::commit(prepared)` is the sole application boundary: it applies
+exactly that transition once and returns the results; it refuses a
 preparation from an older state version (`BBBC0201`) or from another stepper
-(`BBBC0202`). Dropping a `PreparedStep` refuses it. `push` is `prepare` and
-then commit; `finish` is `prepare_finish` and then commit.
+(`BBBC0202`), and at the last state version, `u64::MAX`, it refuses every
+preparation (`BBBC0203`) rather than wrap. `push` is `prepare` and then
+commit; `finish` is `prepare_finish` and then commit. The admission rule is
+the host's; the crate names none.
 
 Rules worth knowing:
 
@@ -327,7 +333,7 @@ test data, not part of the library.
 | `tests/step09_observers.rs` | Same results with no observer, a counting observer and the bowl adapter |
 | `tests/step10_core1o.rs` | A program-only shadow of core-1o's parser agrees with it on all 37 published fixtures (read from the cargo registry, read only) |
 | `tests/step11_klepto.rs` | klepto agrees on function declarations, `is_async`, and call references in `tests/corpus/klepto` |
-| `tests/step12_prepared.rs` | `push` equals `prepare` then `commit` over the fixtures, observer events included; `prepare` changes nothing; effects before commit; commit once; stale and other-stepper preparations refused; drop and refusal change nothing; several positions and `Stop`; the verifier's representatives prepare as authorized |
+| `tests/step12_prepared.rs` | `push` equals `prepare` then `commit` over the fixtures, observer events included; `prepare` changes nothing; effects before commit; commit once; stale and other-stepper preparations refused; drop and refusal change nothing; several positions and `Stop`; an observer panic during commit applies nothing; the verifier's representatives prepare as authorized |
 | `tests/step13_prepared_compile_fail.rs` | Outside code cannot build a `PreparedStep`, clone one, commit one twice, or commit through `&Stepper` |
 | `tests/correction1_contract_only.rs` | A program with no recognizer builds, verifies and steps; adding a recognizer changes nothing for contracts that read no frame |
 | `tests/correction2_evidence.rs` | Three independent evidence dimensions in one contract; absent evidence reads as nothing; the verifier reads every evidence dimension |

@@ -18,17 +18,21 @@
 //! it. This is what the verifier models: it evaluates the end item and does
 //! not follow its successor.
 //!
-//! A step has two phases. [`Stepper::prepare`] (and
-//! [`Stepper::prepare_finish`]) runs everything a step does up to and
-//! excluding the write, on a copy of the stepper's position in its input,
-//! and returns a [`PreparedStep`]: the results each position would have,
-//! their effects and refusals. It changes nothing in the stepper and calls
-//! no observer. [`Stepper::commit`] applies exactly that prepared transition
-//! once: it hands the observer the events of every prepared position, in
-//! the order `push` always gave them, and replaces the stepper's state and
-//! window with the prepared ones. Dropping a `PreparedStep` is refusing it:
-//! the stepper stays as it was. `push` is `prepare` and then `commit`, and
-//! `finish` is `prepare_finish` and then `commit`.
+//! A step has two phases, so a host can admit a transition before it
+//! happens. [`Stepper::prepare`] (and [`Stepper::prepare_finish`])
+//! authorizes a step's semantic transition without mutating live state: it
+//! runs everything a step does up to and excluding the write (admission,
+//! framing, contract evaluation, authorization and the commit rules) on a
+//! copy of the stepper's cursor (committed state, window, counters, halted
+//! and finished flags), and returns a [`PreparedStep`]. It changes nothing in
+//! the stepper and calls no observer. The host may inspect a preparation and
+//! decline it by dropping it; nothing changes then. [`Stepper::commit`] is
+//! the sole application boundary: it applies exactly the prepared transition
+//! once, recomputing nothing. It hands the observer the events of every
+//! prepared position, in the order `push` always gave them, and puts the
+//! prepared cursor in place of the stepper's. `push` is `prepare` and then
+//! `commit`, and `finish` is `prepare_finish` and then `commit`. What a host
+//! admits by is the host's: the stepper names none.
 //!
 //! Each commit adds one to the stepper's state version
 //! ([`Stepper::version`]). A prepared step carries the version and the
@@ -36,7 +40,14 @@
 //! ([`CommitRefusal::Stale`], `BBBC0201`) or from another stepper
 //! ([`CommitRefusal::OtherStepper`], `BBBC0202`), and changes nothing then.
 //! A prepared step is not `Clone` and `commit` takes it by value, so one
-//! preparation is committed at most once.
+//! preparation is committed at most once. The version never wraps: at
+//! `u64::MAX` it cannot advance, `commit` refuses every preparation
+//! ([`CommitRefusal::Exhausted`], `BBBC0203`), and `push` and `finish` apply
+//! nothing and return no results.
+//!
+//! If the observer panics during `commit`, the panic goes on to the caller
+//! and the stepper keeps its cursor and version from before the commit; the
+//! observer has seen the events up to the panic.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,8 +88,20 @@ pub struct Stepper<'p, O: Observer> {
 }
 
 /// Numbers every stepper, so a prepared step names the stepper it came from.
-/// It decides no result: it only tells one stepper from another.
+/// It decides no result: it only tells one stepper from another. Which number
+/// a stepper gets depends on the order threads make steppers in; that no two
+/// get the same one does not.
 static INSTANCES: AtomicU64 = AtomicU64::new(0);
+
+/// The next stepper number. Each number is handed out once, from one atomic
+/// read-modify-write, whatever the thread. The counter never wraps: once
+/// every number below `u64::MAX` is taken it panics, as `std::thread`
+/// does when thread ids run out.
+fn next_instance(counter: &AtomicU64) -> u64 {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .expect("every stepper number is taken: u64::MAX steppers were made in this process")
+}
 
 /// Where a stepper is in its input: the committed state, the window of
 /// observations still needed, and the counters. `prepare` steps a copy of it;
@@ -95,14 +118,21 @@ struct Cursor {
     finished: bool,
 }
 
-/// A step run up to and excluding its write: the result of every position it
-/// steps, with their effects and refusals, and the state and window the
-/// stepper would have after them.
+/// A step's semantic transition, authorized and not applied: the result of
+/// every position it steps, with their effects and refusals, and the state
+/// and window the stepper would have after them.
+///
+/// It is read-only. A host inspects it ([`results`](Self::results),
+/// [`effects`](Self::effects), [`is_refused`](Self::is_refused),
+/// [`halts`](Self::halts), [`state_after`](Self::state_after),
+/// [`version`](Self::version)) and either hands it to [`Stepper::commit`], the
+/// one place it is applied, or declines it by dropping it; dropping changes
+/// nothing. No accessor gives a way to change it or the stepper.
 ///
 /// Only [`Stepper::prepare`] and [`Stepper::prepare_finish`] make one (its
-/// fields are private), it is not `Clone`, and [`Stepper::commit`] takes it by
-/// value: it is applied at most once, to the stepper and state version it was
-/// prepared from. Dropping it is refusing it; nothing changes.
+/// fields are private, and it has no `Default` or `From`), it is not `Clone`,
+/// and `commit` takes it by value: it is applied at most once, to the stepper
+/// and state version it was prepared from.
 ///
 /// One prepared step holds every position its call steps, in order, each
 /// prepared from the state the one before it leaves. A `push` steps zero or
@@ -179,6 +209,11 @@ impl PreparedStep {
 
 impl<'p, O: Observer> Stepper<'p, O> {
     /// A stepper at the program's start state, state version 0.
+    ///
+    /// # Panics
+    ///
+    /// When `u64::MAX` steppers were already made in this process, so no
+    /// number is left to tell this one from every earlier one.
     pub fn new(program: &'p VerifiedProgram, observer: O) -> Self {
         Self {
             program,
@@ -192,7 +227,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
                 halted: false,
                 finished: false,
             },
-            instance: INSTANCES.fetch_add(1, Ordering::Relaxed),
+            instance: next_instance(&INSTANCES),
             version: 0,
             observer,
         }
@@ -204,9 +239,11 @@ impl<'p, O: Observer> Stepper<'p, O> {
     /// its own step with `Evidence`: the end word is reserved for `finish`.
     ///
     /// The same as [`prepare`](Self::prepare) and then [`commit`](Self::commit).
+    /// At the last state version, where `commit` refuses
+    /// ([`CommitRefusal::Exhausted`]), it applies nothing and returns no results.
     pub fn push(&mut self, observation: Observation) -> Vec<StepResult> {
         let prepared = self.prepare(observation);
-        self.apply(prepared)
+        self.commit(prepared).unwrap_or_default()
     }
 
     /// Steps every remaining position, then the end item. The end item is
@@ -214,17 +251,20 @@ impl<'p, O: Observer> Stepper<'p, O> {
     /// item and nothing left to step.
     ///
     /// The same as [`prepare_finish`](Self::prepare_finish) and then
-    /// [`commit`](Self::commit).
+    /// [`commit`](Self::commit). At the last state version it applies nothing
+    /// and returns no results, as `push` does.
     pub fn finish(&mut self) -> Vec<StepResult> {
         let prepared = self.prepare_finish();
-        self.apply(prepared)
+        self.commit(prepared).unwrap_or_default()
     }
 
-    /// What [`push`](Self::push) would do with `observation`, without doing it:
-    /// every position it completes, stepped through admission, framing,
-    /// contract evaluation, authorization and commit on a copy of the
-    /// stepper's state and window. The stepper and its observer are not
-    /// touched. After a `Stop` refusal or after `finish` it steps nothing.
+    /// Authorizes what [`push`](Self::push) would do with `observation`,
+    /// without mutating live state: every position it completes, stepped
+    /// through admission, framing, contract evaluation, authorization and the
+    /// commit rules on a copy of the stepper's state and window. The stepper
+    /// and its observer are not touched. The result is applied only by
+    /// [`commit`](Self::commit); dropping it declines it. After a `Stop`
+    /// refusal or after `finish` it steps nothing.
     pub fn prepare(&self, observation: Observation) -> PreparedStep {
         let mut after = self.cursor.clone();
         let mut results = Vec::new();
@@ -244,9 +284,10 @@ impl<'p, O: Observer> Stepper<'p, O> {
         self.prepared(results, seen, after)
     }
 
-    /// What [`finish`](Self::finish) would do, without doing it: every
-    /// remaining position and the end item, each from the state the one
-    /// before it leaves, stopping at a `Stop` refusal.
+    /// Authorizes what [`finish`](Self::finish) would do, without mutating
+    /// live state: every remaining position and the end item, each from the
+    /// state the one before it leaves, stopping at a `Stop` refusal. Applied
+    /// only by [`commit`](Self::commit), like [`prepare`](Self::prepare).
     pub fn prepare_finish(&self) -> PreparedStep {
         let mut after = self.cursor.clone();
         let mut results = Vec::new();
@@ -263,10 +304,15 @@ impl<'p, O: Observer> Stepper<'p, O> {
         self.prepared(results, seen, after)
     }
 
-    /// Applies `prepared` and returns its results: the observer gets every
-    /// event of every prepared position, and the stepper takes the prepared
-    /// state and window. Refused, with nothing changed, when `prepared` comes
-    /// from another stepper or from an older state version.
+    /// The sole application boundary: applies exactly the transition
+    /// `prepared` holds and returns its results. The observer gets every event
+    /// of every prepared position, the stepper takes the prepared state and
+    /// window, and the state version goes up by one; nothing is recomputed.
+    ///
+    /// Refused, with nothing changed and no event observed, when `prepared`
+    /// comes from another stepper ([`CommitRefusal::OtherStepper`]), from an
+    /// older state version ([`CommitRefusal::Stale`]), or when the stepper is
+    /// at the last state version, `u64::MAX` ([`CommitRefusal::Exhausted`]).
     pub fn commit(&mut self, prepared: PreparedStep) -> Result<Vec<StepResult>, CommitRefusal> {
         if prepared.instance != self.instance {
             return Err(CommitRefusal::OtherStepper);
@@ -277,11 +323,17 @@ impl<'p, O: Observer> Stepper<'p, O> {
                 current: self.version,
             });
         }
-        Ok(self.apply(prepared))
+        let Some(next) = self.version.checked_add(1) else {
+            return Err(CommitRefusal::Exhausted {
+                version: self.version,
+            });
+        };
+        Ok(self.apply(prepared, next))
     }
 
     /// The state version: how many commits this stepper has applied. A
-    /// `push` or `finish` is one commit.
+    /// `push` or `finish` is one commit. It never wraps; see
+    /// [`CommitRefusal::Exhausted`].
     #[must_use]
     pub const fn version(&self) -> u64 {
         self.version
@@ -361,8 +413,9 @@ impl<'p, O: Observer> Stepper<'p, O> {
         }
     }
 
-    /// Applies a step prepared from this stepper at this version.
-    fn apply(&mut self, prepared: PreparedStep) -> Vec<StepResult> {
+    /// Applies a step prepared from this stepper at this version, and moves
+    /// the version to `next`.
+    fn apply(&mut self, prepared: PreparedStep, next: u64) -> Vec<StepResult> {
         let PreparedStep {
             results,
             seen,
@@ -399,7 +452,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
             }
         }
         self.cursor = after;
-        self.version = self.version.wrapping_add(1);
+        self.version = next;
         results
     }
 }
@@ -597,4 +650,97 @@ fn admit(spec: &ProgramSpec, observation: &Observation) -> Result<(), Refusal> {
         check(position, dim, word)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+impl<O: Observer> Stepper<'_, O> {
+    /// Puts the stepper at `version`, to test the last versions.
+    pub(crate) const fn set_version(&mut self, version: u64) {
+        self.version = version;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::catch_unwind;
+    use std::sync::atomic::AtomicU64;
+
+    use liaise::Liaise;
+
+    use super::{CommitRefusal, Stepper, next_instance};
+    use crate::model::{DimensionId, Observation, contract};
+    use crate::observe::NoObserver;
+    use crate::test_support::{SET_INLINE, SET_TIMER, WHEN_B, spec};
+    use crate::verify::{VerifiedProgram, VerifyLimits, verify};
+
+    fn program() -> VerifiedProgram {
+        let set_timer = contract("set-timer")
+            .when(WHEN_B)
+            .transition(&[SET_TIMER, SET_INLINE]);
+        verify(
+            spec(&[set_timer]),
+            VerifyLimits {
+                max_states: 1_000,
+                max_witness_tries: 1_024,
+            },
+        )
+        .expect("test program verifies")
+    }
+
+    /// Item `b` at `position`.
+    fn b(position: u32) -> Observation {
+        Observation::new(position).with(DimensionId(0), 1)
+    }
+
+    #[test]
+    fn the_version_never_wraps() {
+        let program = program();
+        let mut stepper = Stepper::new(&program, NoObserver);
+        stepper.set_version(u64::MAX - 1);
+        let stale = stepper.prepare(b(0));
+        // The last commit there is: u64::MAX - 1 to u64::MAX.
+        let _ = stepper.push(b(0));
+        assert_eq!(stepper.version(), u64::MAX);
+        assert_eq!(
+            stepper.commit(stale).unwrap_err(),
+            CommitRefusal::Stale {
+                prepared: u64::MAX - 1,
+                current: u64::MAX,
+            }
+        );
+
+        // At u64::MAX every commit is refused and nothing changes, though
+        // the preparations would step positions.
+        let state = stepper.state().clone();
+        let last = stepper.prepare_finish();
+        assert_eq!(last.version(), u64::MAX);
+        assert!(!last.results().is_empty());
+        let refusal = stepper.commit(last).unwrap_err();
+        assert_eq!(refusal, CommitRefusal::Exhausted { version: u64::MAX });
+        assert_eq!(refusal.code(), "BBBC0203");
+        assert!(stepper.push(b(1)).is_empty());
+        assert!(stepper.finish().is_empty());
+        assert_eq!(stepper.version(), u64::MAX);
+        assert_eq!(stepper.state(), &state);
+        assert!(!stepper.prepare_finish().results().is_empty());
+    }
+
+    #[test]
+    fn stepper_numbers_are_never_reused() {
+        let counter = AtomicU64::new(u64::MAX - 2);
+        assert_eq!(next_instance(&counter), u64::MAX - 2);
+        assert_eq!(next_instance(&counter), u64::MAX - 1);
+        // u64::MAX is never handed out, and the counter does not wrap to 0.
+        assert!(catch_unwind(|| next_instance(&counter)).is_err());
+        assert!(catch_unwind(|| next_instance(&counter)).is_err());
+        assert_eq!(counter.into_inner(), u64::MAX);
+    }
+
+    #[test]
+    fn two_steppers_never_share_a_number() {
+        let program = program();
+        let a = Stepper::new(&program, NoObserver);
+        let b = Stepper::new(&program, NoObserver);
+        assert_ne!(a.instance, b.instance);
+    }
 }

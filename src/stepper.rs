@@ -17,10 +17,32 @@
 //! commits nothing and the stream goes on, or stops, from the state before
 //! it. This is what the verifier models: it evaluates the end item and does
 //! not follow its successor.
+//!
+//! A step has two phases. [`Stepper::prepare`] (and
+//! [`Stepper::prepare_finish`]) runs everything a step does up to and
+//! excluding the write, on a copy of the stepper's position in its input,
+//! and returns a [`PreparedStep`]: the results each position would have,
+//! their effects and refusals. It changes nothing in the stepper and calls
+//! no observer. [`Stepper::commit`] applies exactly that prepared transition
+//! once: it hands the observer the events of every prepared position, in
+//! the order `push` always gave them, and replaces the stepper's state and
+//! window with the prepared ones. Dropping a `PreparedStep` is refusing it:
+//! the stepper stays as it was. `push` is `prepare` and then `commit`, and
+//! `finish` is `prepare_finish` and then `commit`.
+//!
+//! Each commit adds one to the stepper's state version
+//! ([`Stepper::version`]). A prepared step carries the version and the
+//! stepper it was prepared from; `commit` refuses one from an older version
+//! ([`CommitRefusal::Stale`], `BBBC0201`) or from another stepper
+//! ([`CommitRefusal::OtherStepper`], `BBBC0202`), and changes nothing then.
+//! A prepared step is not `Clone` and `commit` takes it by value, so one
+//! preparation is committed at most once.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::codes::Refusal;
+use crate::codes::{CommitRefusal, Refusal};
+use crate::contract::Candidate;
 use crate::frame::FrameFacts;
 use crate::model::{ContractId, DimensionId, DimensionRole, Observation, ProgramSpec, RefusalRule};
 use crate::observe::{Observer, StepEvent};
@@ -48,6 +70,21 @@ pub struct StepResult {
 #[derive(Debug)]
 pub struct Stepper<'p, O: Observer> {
     program: &'p VerifiedProgram,
+    cursor: Cursor,
+    instance: u64,
+    version: u64,
+    observer: O,
+}
+
+/// Numbers every stepper, so a prepared step names the stepper it came from.
+/// It decides no result: it only tells one stepper from another.
+static INSTANCES: AtomicU64 = AtomicU64::new(0);
+
+/// Where a stepper is in its input: the committed state, the window of
+/// observations still needed, and the counters. `prepare` steps a copy of it;
+/// `commit` puts the copy in its place.
+#[derive(Debug, Clone)]
+struct Cursor {
     state: ProjectionState,
     buffer: VecDeque<(Observation, Option<Refusal>)>,
     base: usize,
@@ -56,22 +93,107 @@ pub struct Stepper<'p, O: Observer> {
     end_position: u32,
     halted: bool,
     finished: bool,
-    observer: O,
+}
+
+/// A step run up to and excluding its write: the result of every position it
+/// steps, with their effects and refusals, and the state and window the
+/// stepper would have after them.
+///
+/// Only [`Stepper::prepare`] and [`Stepper::prepare_finish`] make one (its
+/// fields are private), it is not `Clone`, and [`Stepper::commit`] takes it by
+/// value: it is applied at most once, to the stepper and state version it was
+/// prepared from. Dropping it is refusing it; nothing changes.
+///
+/// One prepared step holds every position its call steps, in order, each
+/// prepared from the state the one before it leaves. A `push` steps zero or
+/// one position, a `finish` the rest of the window and the end item.
+#[derive(Debug)]
+#[must_use = "a prepared step changes nothing until `Stepper::commit` applies it"]
+pub struct PreparedStep {
+    instance: u64,
+    version: u64,
+    results: Vec<StepResult>,
+    seen: Vec<Seen>,
+    after: Cursor,
+}
+
+/// What one prepared position showed, kept so that `commit` gives the
+/// observer the same events, in the same order, as stepping in place.
+#[derive(Debug)]
+struct Seen {
+    observation: Observation,
+    frames: Vec<FrameFacts>,
+    candidates: Vec<Candidate>,
+    decision: Decision,
+}
+
+#[derive(Debug)]
+enum Decision {
+    /// Refused before authorization: admission, the interpretations limit,
+    /// or containment.
+    Refused,
+    /// Authorized these contracts; commit refused the write.
+    Unwritten(Vec<ContractId>),
+    /// Authorized and written: the state after. The contracts and effects are
+    /// the position's result.
+    Written(ProjectionState),
+}
+
+impl PreparedStep {
+    /// The stepper's state version this was prepared from.
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// What each stepped position would give: committed contracts and effects,
+    /// or refusals. The same values `commit` returns.
+    #[must_use]
+    pub fn results(&self) -> &[StepResult] {
+        &self.results
+    }
+
+    /// Every effect the step would emit, position by position, in dimension order.
+    pub fn effects(&self) -> impl Iterator<Item = &Effect> {
+        self.results.iter().flat_map(|r| r.effects.iter())
+    }
+
+    /// True when some position would refuse.
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
+        self.results.iter().any(|r| !r.refusals.is_empty())
+    }
+
+    /// True when the stepper would be halted after it (a `Stop` refusal).
+    #[must_use]
+    pub const fn halts(&self) -> bool {
+        self.after.halted
+    }
+
+    /// The committed state the stepper would have after it.
+    #[must_use]
+    pub const fn state_after(&self) -> &ProjectionState {
+        &self.after.state
+    }
 }
 
 impl<'p, O: Observer> Stepper<'p, O> {
-    /// A stepper at the program's start state.
+    /// A stepper at the program's start state, state version 0.
     pub fn new(program: &'p VerifiedProgram, observer: O) -> Self {
         Self {
             program,
-            state: ProjectionState::start(program.spec()),
-            buffer: VecDeque::new(),
-            base: 0,
-            received: 0,
-            next: 0,
-            end_position: 0,
-            halted: false,
-            finished: false,
+            cursor: Cursor {
+                state: ProjectionState::start(program.spec()),
+                buffer: VecDeque::new(),
+                base: 0,
+                received: 0,
+                next: 0,
+                end_position: 0,
+                halted: false,
+                finished: false,
+            },
+            instance: INSTANCES.fetch_add(1, Ordering::Relaxed),
+            version: 0,
             observer,
         }
     }
@@ -80,42 +202,95 @@ impl<'p, O: Observer> Stepper<'p, O> {
     /// After a `Stop` refusal or after `finish`, nothing more is stepped.
     /// An observation whose item is the recognizer's end word is refused at
     /// its own step with `Evidence`: the end word is reserved for `finish`.
+    ///
+    /// The same as [`prepare`](Self::prepare) and then [`commit`](Self::commit).
     pub fn push(&mut self, observation: Observation) -> Vec<StepResult> {
-        if self.halted || self.finished {
-            return Vec::new();
-        }
-        self.end_position = observation.position().saturating_add(1);
-        let refusal = admit(self.program.spec(), &observation).err();
-        self.buffer.push_back((observation, refusal));
-        self.received += 1;
-        let radius = self.program.spec().window_radius();
-        let mut results = Vec::new();
-        while !self.halted && self.next + radius < self.received {
-            results.push(self.step(false));
-        }
-        results
+        let prepared = self.prepare(observation);
+        self.apply(prepared)
     }
 
     /// Steps every remaining position, then the end item. The end item is
     /// made here, never pushed. A program without a recognizer has no end
     /// item and nothing left to step.
+    ///
+    /// The same as [`prepare_finish`](Self::prepare_finish) and then
+    /// [`commit`](Self::commit).
     pub fn finish(&mut self) -> Vec<StepResult> {
-        if self.finished {
-            return Vec::new();
-        }
+        let prepared = self.prepare_finish();
+        self.apply(prepared)
+    }
+
+    /// What [`push`](Self::push) would do with `observation`, without doing it:
+    /// every position it completes, stepped through admission, framing,
+    /// contract evaluation, authorization and commit on a copy of the
+    /// stepper's state and window. The stepper and its observer are not
+    /// touched. After a `Stop` refusal or after `finish` it steps nothing.
+    pub fn prepare(&self, observation: Observation) -> PreparedStep {
+        let mut after = self.cursor.clone();
         let mut results = Vec::new();
-        let last = self.received + usize::from(self.program.spec().end_word().is_some());
-        while !self.halted && self.next < last {
-            results.push(self.step(true));
+        let mut seen = Vec::new();
+        if !(after.halted || after.finished) {
+            after.end_position = observation.position().saturating_add(1);
+            let refusal = admit(self.program.spec(), &observation).err();
+            after.buffer.push_back((observation, refusal));
+            after.received += 1;
+            let radius = self.program.spec().window_radius();
+            while !after.halted && after.next + radius < after.received {
+                let (result, position) = after.step(self.program, false);
+                results.push(result);
+                seen.push(position);
+            }
         }
-        self.finished = true;
-        results
+        self.prepared(results, seen, after)
+    }
+
+    /// What [`finish`](Self::finish) would do, without doing it: every
+    /// remaining position and the end item, each from the state the one
+    /// before it leaves, stopping at a `Stop` refusal.
+    pub fn prepare_finish(&self) -> PreparedStep {
+        let mut after = self.cursor.clone();
+        let mut results = Vec::new();
+        let mut seen = Vec::new();
+        if !after.finished {
+            let last = after.received + usize::from(self.program.spec().end_word().is_some());
+            while !after.halted && after.next < last {
+                let (result, position) = after.step(self.program, true);
+                results.push(result);
+                seen.push(position);
+            }
+            after.finished = true;
+        }
+        self.prepared(results, seen, after)
+    }
+
+    /// Applies `prepared` and returns its results: the observer gets every
+    /// event of every prepared position, and the stepper takes the prepared
+    /// state and window. Refused, with nothing changed, when `prepared` comes
+    /// from another stepper or from an older state version.
+    pub fn commit(&mut self, prepared: PreparedStep) -> Result<Vec<StepResult>, CommitRefusal> {
+        if prepared.instance != self.instance {
+            return Err(CommitRefusal::OtherStepper);
+        }
+        if prepared.version != self.version {
+            return Err(CommitRefusal::Stale {
+                prepared: prepared.version,
+                current: self.version,
+            });
+        }
+        Ok(self.apply(prepared))
+    }
+
+    /// The state version: how many commits this stepper has applied. A
+    /// `push` or `finish` is one commit.
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.version
     }
 
     /// The committed state.
     #[must_use]
     pub const fn state(&self) -> &ProjectionState {
-        &self.state
+        &self.cursor.state
     }
 
     /// The observer.
@@ -132,7 +307,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
     /// True after a `Stop` refusal.
     #[must_use]
     pub const fn is_halted(&self) -> bool {
-        self.halted
+        self.cursor.halted
     }
 
     /// One representative observation for each class of observations some
@@ -155,7 +330,7 @@ impl<'p, O: Observer> Stepper<'p, O> {
     pub fn legal_next_representatives(&self) -> Vec<Observation> {
         let program = self.program;
         let spec = program.spec();
-        let next = u32::try_from(self.next).unwrap_or(u32::MAX);
+        let next = u32::try_from(self.cursor.next).unwrap_or(u32::MAX);
         let permitted = usize::from(spec.containment().max_interpretations);
         program
             .inputs()
@@ -169,14 +344,68 @@ impl<'p, O: Observer> Stepper<'p, O> {
                     .iter()
                     .filter(|frames| frames.len() <= permitted)
                     .any(|frames| {
-                        let found = gather(spec, &self.state, &ids, input, frames);
-                        authorize(spec, &self.state, &found.candidates, next, 0).is_ok()
+                        let found = gather(spec, &self.cursor.state, &ids, input, frames);
+                        authorize(spec, &self.cursor.state, &found.candidates, next, 0).is_ok()
                     })
             })
             .collect()
     }
 
-    fn item_at(&self, index: usize, finishing: bool) -> Option<u128> {
+    fn prepared(&self, results: Vec<StepResult>, seen: Vec<Seen>, after: Cursor) -> PreparedStep {
+        PreparedStep {
+            instance: self.instance,
+            version: self.version,
+            results,
+            seen,
+            after,
+        }
+    }
+
+    /// Applies a step prepared from this stepper at this version.
+    fn apply(&mut self, prepared: PreparedStep) -> Vec<StepResult> {
+        let PreparedStep {
+            results,
+            seen,
+            after,
+            ..
+        } = prepared;
+        let mut before: &ProjectionState = &self.cursor.state;
+        for (position, result) in seen.iter().zip(&results) {
+            let observer = &mut self.observer;
+            observer.observe(&StepEvent::Observed(&position.observation));
+            observer.observe(&StepEvent::Framed(&position.frames));
+            for c in &position.candidates {
+                observer.observe(&StepEvent::Candidate(c));
+            }
+            match &position.decision {
+                Decision::Refused => {}
+                Decision::Unwritten(contracts) => {
+                    observer.observe(&StepEvent::Authorized(contracts));
+                }
+                Decision::Written(state) => {
+                    observer.observe(&StepEvent::Authorized(&result.committed));
+                    observer.observe(&StepEvent::Committed {
+                        before,
+                        after: state,
+                    });
+                    for effect in &result.effects {
+                        observer.observe(&StepEvent::Emitted(effect));
+                    }
+                    before = state;
+                }
+            }
+            for refusal in &result.refusals {
+                observer.observe(&StepEvent::Refused(refusal));
+            }
+        }
+        self.cursor = after;
+        self.version = self.version.wrapping_add(1);
+        results
+    }
+}
+
+impl Cursor {
+    fn item_at(&self, program: &VerifiedProgram, index: usize, finishing: bool) -> Option<u128> {
         if index < self.base {
             None
         } else if index < self.received {
@@ -184,17 +413,16 @@ impl<'p, O: Observer> Stepper<'p, O> {
             if refusal.is_some() {
                 None
             } else {
-                observation.word(self.program.spec().item_dimension()?)
+                observation.word(program.spec().item_dimension()?)
             }
         } else if finishing {
-            self.program.spec().end_word()
+            program.spec().end_word()
         } else {
             None
         }
     }
 
-    fn step(&mut self, finishing: bool) -> StepResult {
-        let program = self.program;
+    fn step(&mut self, program: &VerifiedProgram, finishing: bool) -> (StepResult, Seen) {
         let spec = program.spec();
         let index = self.next;
         let (observation, admission) = if index < self.received {
@@ -210,16 +438,18 @@ impl<'p, O: Observer> Stepper<'p, O> {
             (end, None)
         };
         let position = observation.position();
-        self.observer.observe(&StepEvent::Observed(&observation));
 
         let frames = program
             .recognizer()
-            .map(|r| r.recognize_with(index, |i| self.item_at(i, finishing)))
+            .map(|r| r.recognize_with(index, |i| self.item_at(program, i, finishing)))
             .unwrap_or_default();
-        self.observer.observe(&StepEvent::Framed(&frames));
 
-        let result = if let Some(refusal) = admission {
-            self.refuse(position, vec![refusal])
+        let (result, candidates, decision) = if let Some(refusal) = admission {
+            (
+                self.refuse(spec, position, vec![refusal]),
+                Vec::new(),
+                Decision::Refused,
+            )
         } else {
             match within(
                 Limit::Interpretations,
@@ -227,8 +457,12 @@ impl<'p, O: Observer> Stepper<'p, O> {
                 spec.containment().max_interpretations,
                 position,
             ) {
-                Err(refusal) => self.refuse(position, vec![refusal]),
-                Ok(()) => self.decide(&observation, &frames),
+                Err(refusal) => (
+                    self.refuse(spec, position, vec![refusal]),
+                    Vec::new(),
+                    Decision::Refused,
+                ),
+                Ok(()) => self.decide(program, &observation, &frames),
             }
         };
 
@@ -238,11 +472,21 @@ impl<'p, O: Observer> Stepper<'p, O> {
             self.buffer.pop_front();
             self.base += 1;
         }
-        result
+        let seen = Seen {
+            observation,
+            frames,
+            candidates,
+            decision,
+        };
+        (result, seen)
     }
 
-    fn decide(&mut self, observation: &Observation, frames: &[FrameFacts]) -> StepResult {
-        let program = self.program;
+    fn decide(
+        &mut self,
+        program: &VerifiedProgram,
+        observation: &Observation,
+        frames: &[FrameFacts],
+    ) -> (StepResult, Vec<Candidate>, Decision) {
         let spec = program.spec();
         let position = observation.position();
         let ids = program.index().lookup(observation);
@@ -250,9 +494,6 @@ impl<'p, O: Observer> Stepper<'p, O> {
             candidates,
             refused,
         } = gather(spec, &self.state, &ids, observation, frames);
-        for c in &candidates {
-            self.observer.observe(&StepEvent::Candidate(c));
-        }
 
         match authorize(spec, &self.state, &candidates, position, refused.len()) {
             Err(refusal) => {
@@ -262,39 +503,37 @@ impl<'p, O: Observer> Stepper<'p, O> {
                     Vec::new()
                 };
                 all.push(refusal);
-                self.refuse(position, all)
+                (
+                    self.refuse(spec, position, all),
+                    candidates,
+                    Decision::Refused,
+                )
             }
             Ok(transition) => {
                 let contracts = transition.contracts().to_vec();
-                self.observer.observe(&StepEvent::Authorized(&contracts));
-                let before = self.state.clone();
                 match commit(spec, &mut self.state, transition) {
-                    Err(refusal) => self.refuse(position, vec![refusal]),
-                    Ok(effects) => {
-                        self.observer.observe(&StepEvent::Committed {
-                            before: &before,
-                            after: &self.state,
-                        });
-                        for effect in &effects {
-                            self.observer.observe(&StepEvent::Emitted(effect));
-                        }
+                    Err(refusal) => (
+                        self.refuse(spec, position, vec![refusal]),
+                        candidates,
+                        Decision::Unwritten(contracts),
+                    ),
+                    Ok(effects) => (
                         StepResult {
                             position,
                             committed: contracts,
                             effects,
                             refusals: Vec::new(),
-                        }
-                    }
+                        },
+                        candidates,
+                        Decision::Written(self.state.clone()),
+                    ),
                 }
             }
         }
     }
 
-    fn refuse(&mut self, position: u32, refusals: Vec<Refusal>) -> StepResult {
-        for refusal in &refusals {
-            self.observer.observe(&StepEvent::Refused(refusal));
-        }
-        if self.program.spec().containment().on_refusal == RefusalRule::Stop {
+    fn refuse(&mut self, spec: &ProgramSpec, position: u32, refusals: Vec<Refusal>) -> StepResult {
+        if spec.containment().on_refusal == RefusalRule::Stop {
             self.halted = true;
         }
         StepResult {

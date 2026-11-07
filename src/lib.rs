@@ -40,7 +40,7 @@ mod verify;
 
 #[cfg(feature = "bowl")]
 pub use bowl::{BowlObserver, EventKind};
-pub use codes::{Finding, Refusal};
+pub use codes::{CommitRefusal, Finding, Refusal};
 pub use contract::{Candidate, FactView, Outcome, evaluate};
 pub use digest::{SPEC_FORMAT, TRACE_FORMAT, TraceHeader, spec_digest, spec_material};
 pub use frame::{FrameFacts, Recognizer};
@@ -55,7 +55,7 @@ pub use model::{
 pub use ob_serve_a_bowl;
 pub use observe::{NoObserver, Observer, StepEvent};
 pub use step::{AuthorizedTransition, Effect, ProjectionState};
-pub use stepper::{StepResult, Stepper};
+pub use stepper::{PreparedStep, StepResult, Stepper};
 pub use verify::{VerificationReport, VerifiedProgram, VerifyLimits, verify};
 
 pub use big_bad_bool_interact::{FieldMatcher, FieldValue, MatchOp};

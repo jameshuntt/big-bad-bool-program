@@ -1,8 +1,9 @@
 //! Every refusal and every finding, as liaise codes.
 //!
 //! [`Finding`] is what `build` and `verify` report about a spec. [`Refusal`] is
-//! what the stepper reports about one input position. Both carry their facts as
-//! liaise evidence, so a report can be read without the message text.
+//! what the stepper reports about one input position. [`CommitRefusal`] is why
+//! the stepper did not apply a prepared step. All carry their facts as liaise
+//! evidence, so a report can be read without the message text.
 //!
 //! This module names no other module of the crate. Names arrive as the
 //! `&'static str` the spec was written with.
@@ -480,4 +481,26 @@ pub enum Refusal {
         /// `dimension.field`, or `dimension stack`.
         target: String,
     },
+}
+
+/// Why `Stepper::commit` did not apply a prepared
+/// step. Nothing changed: the stepper keeps its state, window and version.
+#[derive(Debug, Clone, PartialEq, Eq, LiaiseCodes)]
+#[liaise(prefix = "BBBC", domain = "big-bad-bool-program")]
+pub enum CommitRefusal {
+    /// The stepper committed something after this step was prepared.
+    #[liaise(
+        code = 201,
+        msg = "prepared at state version {prepared}, the stepper is at {current}",
+        evidence(prepared, current)
+    )]
+    Stale {
+        /// The state version the step was prepared from.
+        prepared: u64,
+        /// The stepper's state version now.
+        current: u64,
+    },
+    /// The step was prepared by another stepper.
+    #[liaise(code = 202, msg = "prepared by another stepper")]
+    OtherStepper,
 }

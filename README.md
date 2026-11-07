@@ -177,6 +177,15 @@ interpretation, lets every compatible candidate actualize together, and
 commits their merged writes. Only commit writes state. Observers see each
 stage and return nothing.
 
+A step can be taken in two phases. `Stepper::prepare(observation)` (and
+`prepare_finish()`) runs all of the above on a copy of the stepper's state
+and window and returns a `PreparedStep`: each position's result, effects and
+refusals. The stepper and its observer are untouched. `Stepper::commit(prepared)`
+applies exactly that transition once and returns the results; it refuses a
+preparation from an older state version (`BBBC0201`) or from another stepper
+(`BBBC0202`). Dropping a `PreparedStep` refuses it. `push` is `prepare` and
+then commit; `finish` is `prepare_finish` and then commit.
+
 Rules worth knowing:
 
 - A clause's `Eq` and `NotEq` hold through flaga_solver's `Schema::holds`:
@@ -271,7 +280,7 @@ depends only on the ones before it.
 
 | Module | Does |
 |---|---|
-| `codes` | `Finding` (build and verify) and `Refusal` (stepping), as liaise codes `BBBC0001`.. and `BBBC0101`.. |
+| `codes` | `Finding` (build and verify), `Refusal` (stepping) and `CommitRefusal` (applying a prepared step), as liaise codes `BBBC0001`.., `BBBC0101`.. and `BBBC0201`.. |
 | `model` | Spec types, constructors, `Observation`, `Program` / `ProgramBuilder`, name resolution, interact's matcher checks one for one, role checks |
 | `frame` | `Recognizer`: declared sequences in a window of R items each side, every match kept, positions, boundary, end padding; the exact sets of matches an item can have |
 | `contract` | `FactView`, `evaluate`: not applicable, refused with the failed clause, or a candidate. Shared references only |
@@ -281,7 +290,7 @@ depends only on the ones before it.
 | `digest` | Stable spec material, its digest, the trace header |
 | `verify` | `verify`, the evidence domain, the bounded state search. The only place a `VerifiedProgram` is built |
 | `observe` | `StepEvent`, `Observer`, `NoObserver` |
-| `stepper` | `Stepper`, `StepResult`, `legal_next_representatives` |
+| `stepper` | `Stepper`, `StepResult`, `PreparedStep` (`prepare`, `prepare_finish`, `commit`), `legal_next_representatives` |
 | `bowl` (feature) | `BowlObserver`: publishes each event to an `ObservableWakeRuntime`, drops the report |
 
 ## Rust version
@@ -318,6 +327,8 @@ test data, not part of the library.
 | `tests/step09_observers.rs` | Same results with no observer, a counting observer and the bowl adapter |
 | `tests/step10_core1o.rs` | A program-only shadow of core-1o's parser agrees with it on all 37 published fixtures (read from the cargo registry, read only) |
 | `tests/step11_klepto.rs` | klepto agrees on function declarations, `is_async`, and call references in `tests/corpus/klepto` |
+| `tests/step12_prepared.rs` | `push` equals `prepare` then `commit` over the fixtures, observer events included; `prepare` changes nothing; effects before commit; commit once; stale and other-stepper preparations refused; drop and refusal change nothing; several positions and `Stop`; the verifier's representatives prepare as authorized |
+| `tests/step13_prepared_compile_fail.rs` | Outside code cannot build a `PreparedStep`, clone one, commit one twice, or commit through `&Stepper` |
 | `tests/correction1_contract_only.rs` | A program with no recognizer builds, verifies and steps; adding a recognizer changes nothing for contracts that read no frame |
 | `tests/correction2_evidence.rs` | Three independent evidence dimensions in one contract; absent evidence reads as nothing; the verifier reads every evidence dimension |
 | `tests/correction3_actualization.rs` | Compatible contracts actualize together; identical writes count once; conflicting writes are refused; results do not depend on declaration order; the fan-out limit |

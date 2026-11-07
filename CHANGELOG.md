@@ -2,10 +2,12 @@
 
 Dates are when crates.io got the version, in UTC.
 
-## Unreleased
+## 0.1.1 (2026-11-07)
 
-On branch `prepared-step`, not published. Code commit
-[0e919c2](https://github.com/jameshuntt/big-bad-bool-program/commit/0e919c2f12a99a264ece91e2e847f5c90eae8b73),
+Additive: nothing in the public API of 0.1.0 changed or went away (rustdoc
+JSON of f582666 and of this release compared item by item). Code commits
+[0e919c2](https://github.com/jameshuntt/big-bad-bool-program/commit/0e919c2f12a99a264ece91e2e847f5c90eae8b73)
+and [13d1dec](https://github.com/jameshuntt/big-bad-bool-program/commit/13d1decdd375d3eeb70497bf2235aaa8873c773e),
 from 0.1.0 at f582666.
 
 ### Added: a step in two phases
@@ -50,10 +52,69 @@ host can see the effects first and refuse by dropping the preparation.
   `commit` directly ([src/verify.rs L670-698 @ f582666](https://github.com/jameshuntt/big-bad-bool-program/blob/f582666faf913e132621cb0ef04b4a95000551c8/src/verify.rs#L670-L698)),
   and `prepare` reaches the same three functions.
 
+### Fixed before release: the state version and the stepper number never wrap
+
+Why: the state version went up with `wrapping_add`, so after `u64::MAX`
+commits it would come back to 0 and a preparation from long before could
+match again. The stepper number came from `fetch_add`, which wraps the same
+way, and two steppers could then share a number.
+
+- Before: [src/stepper.rs L402 @ 0e919c2](https://github.com/jameshuntt/big-bad-bool-program/blob/0e919c2f12a99a264ece91e2e847f5c90eae8b73/src/stepper.rs#L402),
+  `self.version = self.version.wrapping_add(1)`;
+  [src/stepper.rs L195 @ 0e919c2](https://github.com/jameshuntt/big-bad-bool-program/blob/0e919c2f12a99a264ece91e2e847f5c90eae8b73/src/stepper.rs#L195),
+  `INSTANCES.fetch_add(1, Ordering::Relaxed)`.
+- After: [src/stepper.rs L307-332 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L307-L332):
+  `commit` takes the next version with `checked_add` and at `u64::MAX`
+  refuses with `CommitRefusal::Exhausted` (`BBBC0203`,
+  [src/codes.rs L506-519 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/codes.rs#L506-L519)),
+  changing nothing. A refusal, not saturation: a saturated version would
+  accept a preparation made at `u64::MAX` after another commit there.
+  [src/stepper.rs L241-259 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L241-L259):
+  `push` and `finish` go through `commit`, so there they apply nothing and
+  return no results, as after `finish`.
+- [src/stepper.rs L90-104 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L90-L104):
+  the stepper number is taken with `fetch_update` and `checked_add`;
+  `Stepper::new` panics once every number below `u64::MAX` is taken, as
+  `std::thread` does when thread ids run out. Which number a stepper gets
+  depends on thread timing; no result reads it, only the equality check.
+- The docs say what each phase is for: `prepare` authorizes a semantic
+  transition without mutating live state, `commit` is the sole application
+  boundary, a host may inspect a preparation and decline it by dropping it,
+  and the admission rule is the host's. The crate docs show the two phases
+  ([src/lib.rs L24-104 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/lib.rs#L24-L104), a doctest).
+- An observer that panics during `commit`: the panic reaches the caller and
+  the stepper keeps its state, window and version from before the commit
+  (the observer has seen the events up to the panic). In 0.1.0 such a panic
+  in `push` left the step partly applied.
+
+### Checked before release
+
+`prepare` takes `&self`, steps a clone of the private `Cursor` (state,
+window, counters, halted and finished flags) and calls no observer; the
+crate has no interior mutability (no `Cell`, `RefCell`, `Rc`, `Mutex` or
+cache; the stepper number is the only static). `PreparedStep` has private
+fields, no constructor, `Default`, `From` or `Clone`; its accessors take
+`&self` and return references or copies. `commit` swaps in the prepared
+cursor and recomputes nothing. `Stepper` is not `Clone`, so no two steppers
+share a number and a version. `push`, `finish` and `commit` are the only
+`&mut self` paths that change the stepper, and each is one commit. The
+frame, contract, step, verify, model, observe, bowl and digest modules are
+unchanged from 0.1.0, and the verifier still calls `gather`, `authorize`
+and `commit` directly.
+
 Proof:
 
 - The 107 tests of 0.1.0 (109 with `bowl`) pass unchanged, golden observer
   events included.
+- [src/stepper.rs @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L655-L746):
+  `the_version_never_wraps` (a stepper put at `u64::MAX - 1` commits once,
+  a preparation from `u64::MAX - 1` is then `Stale`, and at `u64::MAX`
+  `commit`, `push` and `finish` change nothing though the preparations
+  would step positions), `stepper_numbers_are_never_reused` (a counter at
+  `u64::MAX - 2` hands out two numbers, then panics and stays at
+  `u64::MAX`), `two_steppers_never_share_a_number`.
+- [tests/step12_prepared.rs @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/tests/step12_prepared.rs#L438-L467):
+  `an_observer_panic_during_commit_applies_nothing`.
 - [tests/step12_prepared.rs @ 0e919c2](https://github.com/jameshuntt/big-bad-bool-program/blob/0e919c2f12a99a264ece91e2e847f5c90eae8b73/tests/step12_prepared.rs),
   eleven tests: `push_is_prepare_then_commit_over_the_fixtures` (results,
   state, version and every observer event equal, three fixture inputs plus a
@@ -71,10 +132,11 @@ Proof:
 - [tests/step13_prepared_compile_fail.rs @ 0e919c2](https://github.com/jameshuntt/big-bad-bool-program/blob/0e919c2f12a99a264ece91e2e847f5c90eae8b73/tests/step13_prepared_compile_fail.rs):
   outside code cannot build a `PreparedStep`, clone one, commit one twice, or
   commit through a shared reference to the stepper.
-- `cargo test`: 119 passed. `cargo test --all-features`: 121 passed.
-  `cargo +1.85 test`: 119 passed. `cargo +1.88 test --all-features`: 121
-  passed. fmt, clippy `-D warnings` both ways, docs `-D warnings`, both
-  examples: clean.
+- `cargo test`: 124 passed (25 unit, 98 integration, 1 doctest).
+  `cargo test --all-features`: 126 passed. `cargo +1.85 test`: 124 passed.
+  `cargo +1.88 test --all-features`: 126 passed (the `bowl` feature needs
+  1.88, the rust-version of ob-serve-a-bowl). fmt, clippy `-D warnings` both
+  ways, docs `-D warnings`, both examples: clean.
 
 ## 0.1.0 (2026-11-06)
 

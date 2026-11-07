@@ -6,8 +6,9 @@ Dates are when crates.io got the version, in UTC.
 
 Additive: nothing in the public API of 0.1.0 changed or went away (rustdoc
 JSON of f582666 and of this release compared item by item). Code commits
-[0e919c2](https://github.com/jameshuntt/big-bad-bool-program/commit/0e919c2f12a99a264ece91e2e847f5c90eae8b73)
-and [13d1dec](https://github.com/jameshuntt/big-bad-bool-program/commit/13d1decdd375d3eeb70497bf2235aaa8873c773e),
+[0e919c2](https://github.com/jameshuntt/big-bad-bool-program/commit/0e919c2f12a99a264ece91e2e847f5c90eae8b73),
+[13d1dec](https://github.com/jameshuntt/big-bad-bool-program/commit/13d1decdd375d3eeb70497bf2235aaa8873c773e)
+and [2525c01](https://github.com/jameshuntt/big-bad-bool-program/commit/2525c015a6c3e5fb237492f179b4006d924a22fd),
 from 0.1.0 at f582666.
 
 ### Added: a step in two phases
@@ -72,10 +73,11 @@ way, and two steppers could then share a number.
   [src/stepper.rs L241-259 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L241-L259):
   `push` and `finish` go through `commit`, so there they apply nothing and
   return no results, as after `finish`.
-- [src/stepper.rs L90-104 @ 13d1dec](https://github.com/jameshuntt/big-bad-bool-program/blob/13d1decdd375d3eeb70497bf2235aaa8873c773e/src/stepper.rs#L90-L104):
-  the stepper number is taken with `fetch_update` and `checked_add`;
-  `Stepper::new` panics once every number below `u64::MAX` is taken, as
-  `std::thread` does when thread ids run out. Which number a stepper gets
+- [src/stepper.rs L90-111 @ 2525c01](https://github.com/jameshuntt/big-bad-bool-program/blob/2525c015a6c3e5fb237492f179b4006d924a22fd/src/stepper.rs#L90-L111):
+  the stepper number is taken with `checked_add` and `compare_exchange_weak`
+  (at 13d1dec it was `fetch_update`, which Rust 1.99 deprecates and CI's
+  clippy refused); `Stepper::new` panics once every number below `u64::MAX`
+  is taken, as `std::thread` does when thread ids run out. Which number a stepper gets
   depends on thread timing; no result reads it, only the equality check.
 - The docs say what each phase is for: `prepare` authorizes a semantic
   transition without mutating live state, `commit` is the sole application

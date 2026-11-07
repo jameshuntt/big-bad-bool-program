@@ -93,14 +93,21 @@ pub struct Stepper<'p, O: Observer> {
 /// get the same one does not.
 static INSTANCES: AtomicU64 = AtomicU64::new(0);
 
-/// The next stepper number. Each number is handed out once, from one atomic
-/// read-modify-write, whatever the thread. The counter never wraps: once
-/// every number below `u64::MAX` is taken it panics, as `std::thread`
+/// The next stepper number. Each number is handed out once, by one
+/// successful compare-exchange, whatever the thread. The counter never wraps:
+/// once every number below `u64::MAX` is taken it panics, as `std::thread`
 /// does when thread ids run out.
 fn next_instance(counter: &AtomicU64) -> u64 {
-    counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-        .expect("every stepper number is taken: u64::MAX steppers were made in this process")
+    let mut n = counter.load(Ordering::Relaxed);
+    loop {
+        let next = n
+            .checked_add(1)
+            .expect("every stepper number is taken: u64::MAX steppers were made in this process");
+        match counter.compare_exchange_weak(n, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return n,
+            Err(now) => n = now,
+        }
+    }
 }
 
 /// Where a stepper is in its input: the committed state, the window of
